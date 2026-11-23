@@ -1,0 +1,22 @@
+{
+  "cmsis-csolution.environmentVariables": {
+    "CMSIS_PACK_ROOT": "D:/starfire_2/stm32f407vet6/.packs",
+    "AC6_TOOLCHAIN_6_24_0": "C:/Users/delig/.vcpkg/artifacts/2139c4c6/compilers.arm.armclang/6.24.0/bin"
+  },
+  "cmsis-csolution.downloadPacks": false,
+  "files.associations": { "*.h": "c", "*.csolution.yml": "yaml", "*.cproject.yml": "yaml" },
+  "files.exclude": { ".packs": true, ".tools": true },
+  "search.exclude": { ".packs/**": true, ".tools/**": true, "out/**": true, "tmp/**": true },
+  "terminal.integrated.env.windows": {
+    "CMSIS_PACK_ROOT": "D:/starfire_2/stm32f407vet6/.packs",
+    "AC6_TOOLCHAIN_6_24_0": "C:/Users/delig/.vcpkg/artifacts/2139c4c6/compilers.arm.armclang/6.24.0/bin"
+  },
+  "cmake.sourceDirectory": "D:/starfire_2/stm32f407vet6/tmp/SkyStar/default",
+  "debug.hideSlowPreLaunchWarning": true,
+  "debug.showInStatusBar": "never",
+  "memory-inspector.addressPadding": "32bit",
+  "memory-inspector.groupings.groupsPerRow": "Autofit",
+  "memory-inspector.groupings.MAUsPerGroup": 4,
+  "memory-inspector.scrollingBehavior": "Auto-Append",
+  "python-envs.defaultEnvManager": "ms-python.python:system"
+}

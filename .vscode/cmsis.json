@@ -1,0 +1,9 @@
+{
+    "targetSet": {
+        "SkyStar": {
+            "activeTargetType": "SkyStar"
+        }
+    },
+    "activeSolution": "../SkyStar.csolution.yml",
+    "activeTarget": "SkyStar"
+}

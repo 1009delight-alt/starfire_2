@@ -1,0 +1,22 @@
+{
+  "device": {
+    "name": "v2.6.11",
+    "zipball_url": "https://api.github.com/repos/STMicroelectronics/cmsis-device-f4/zipball/refs/tags/v2.6.11",
+    "tarball_url": "https://api.github.com/repos/STMicroelectronics/cmsis-device-f4/tarball/refs/tags/v2.6.11",
+    "commit": {
+      "sha": "0fa0e489e053fa1ca7790bb40b4d76458f64c55d",
+      "url": "https://api.github.com/repos/STMicroelectronics/cmsis-device-f4/commits/0fa0e489e053fa1ca7790bb40b4d76458f64c55d"
+    },
+    "node_id": "MDM6UmVmMjI4ODcxNzE1OnJlZnMvdGFncy92Mi42LjEx"
+  },
+  "hal": {
+    "name": "v1.8.6",
+    "zipball_url": "https://api.github.com/repos/STMicroelectronics/stm32f4xx-hal-driver/zipball/refs/tags/v1.8.6",
+    "tarball_url": "https://api.github.com/repos/STMicroelectronics/stm32f4xx-hal-driver/tarball/refs/tags/v1.8.6",
+    "commit": {
+      "sha": "6ef30cf0ef6cc29ad518f37b9e6de89b6b815f90",
+      "url": "https://api.github.com/repos/STMicroelectronics/stm32f4xx-hal-driver/commits/6ef30cf0ef6cc29ad518f37b9e6de89b6b815f90"
+    },
+    "node_id": "MDM6UmVmMjM3MDAzMTE4OnJlZnMvdGFncy92MS44LjY="
+  }
+}

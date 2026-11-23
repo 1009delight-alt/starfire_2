@@ -1,0 +1,30 @@
+solution:
+  created-for: CMSIS-Toolbox@2.14.0
+  cdefault:
+  compiler: AC6@6.24.0
+  packs:
+    - pack: ARM::CMSIS@6.3.0
+    - pack: Keil::STM32F4xx_DFP@3.1.1
+  target-types:
+    - type: SkyStar
+      device: STMicroelectronics::STM32F407VETx
+      target-set:
+        - set:
+          debugger:
+            name: ST-Link@pyOCD
+            protocol: swd
+            clock: 1000000
+  build-types:
+    - type: Debug
+      debug: on
+      optimize: none
+    - type: Release
+      debug: off
+      optimize: balanced
+  misc:
+    - for-compiler: AC6
+      C-CPP:
+        - -gdwarf-5
+        - -funwind-tables
+  projects:
+    - project: SkyStar.cproject.yml
