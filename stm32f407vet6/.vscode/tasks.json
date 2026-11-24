@@ -64,17 +64,10 @@
         },
         {
             "label": "CMSIS Erase",
-            "type": "shell",
+            "type": "cmsis-csolution.pyocd",
             "command": "pyocd",
             "options": {
-                "cwd": "${workspaceFolder}/",
-                "shell": {
-                    "executable": "cmd.exe",
-                    "args": [
-                        "/d",
-                        "/c"
-                    ]
-                }
+                "cwd": "${workspaceFolder}/"
             },
             "args": [
                 "erase",
@@ -88,17 +81,10 @@
         },
         {
             "label": "CMSIS Load",
-            "type": "shell",
+            "type": "cmsis-csolution.pyocd",
             "command": "pyocd",
             "options": {
-                "cwd": "${workspaceFolder}/",
-                "shell": {
-                    "executable": "cmd.exe",
-                    "args": [
-                        "/d",
-                        "/c"
-                    ]
-                }
+                "cwd": "${workspaceFolder}/"
             },
             "args": [
                 "load",
@@ -111,17 +97,10 @@
         },
         {
             "label": "CMSIS Run",
-            "type": "shell",
+            "type": "cmsis-csolution.pyocd",
             "command": "pyocd",
             "options": {
-                "cwd": "${workspaceFolder}/",
-                "shell": {
-                    "executable": "cmd.exe",
-                    "args": [
-                        "/d",
-                        "/c"
-                    ]
-                }
+                "cwd": "${workspaceFolder}/"
             },
             "args": [
                 "gdbserver",
@@ -161,7 +140,9 @@
                 }
             },
             "args": [
-                "list",
+                "info",
+                "--probe",
+                "cmsisdap:",
                 "--cbuild-run",
                 "${command:cmsis-csolution.getCbuildRunFile}"
             ],
