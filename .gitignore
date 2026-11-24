@@ -1,8 +1,19 @@
-out/
-tmp/
-.tools/
-.packs/
-*.cbuild*.yml
-*.cbuild*.json
-.clangd
-RTE/_*/
+# 白名单：只收比赛程序、相机脚本和主文档
+/*
+!/.gitignore
+!/AGENTS.md
+!/星火杯赛题二比赛程序开发交接文档_v2.docx
+!/stm32f407vet6/
+!/openmv4h7plus/
+!/tmp/
+
+# OpenMV IDE 安装目录（约 5 GB）和压缩副本
+/openmv4h7plus/openmvide/
+/openmv4h7plus/*.zip
+
+# tmp 只留主文档生成脚本
+/tmp/*
+!/tmp/build_handover_doc_v2.js
+
+__pycache__/
+*.pyc

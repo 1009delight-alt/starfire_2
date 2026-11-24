@@ -1,0 +1,145 @@
+# AGENTS.md
+
+本文件为在本目录工作的 AI 编码助手（Claude Code、Codex 等）提供项目说明。
+
+## 项目概况
+
+第十四届“星火杯”赛题二的智能小车（基于光电导航的智能移动测量小车）。这个目录不是 git 仓库。系统由三块板组成：
+
+- **STM32F407VET6（立创天空星）**：主控，工程在 `stm32f407vet6/`。
+- **OpenMV4 H7 Plus**：视觉，比赛脚本在 `openmv4h7plus/MAIN/main.py`。
+- **YB-ESF01-V2.0 四路电机驱动板**：通过 USART2 收发 `$...#` 文本帧。
+
+**主文档**是根目录的 `星火杯赛题二比赛程序开发交接文档_v2.docx`。它是比赛程序的规范，规定了接口、两条串口协议、算法、状态机、参数表和验收方法。代码与这份文档不一致时，以文档为准；确实需要改规范时，同步修订文档。生成脚本是 `tmp/build_handover_doc_v2.js`（docx-js；脚本里的输出和资料路径还是整理前的写法）。
+
+### 依据等级
+
+- **事实依据**：赛题细则、装车接线总表、调试日志、商家答复、现场照片，均在 `old/` 下。
+- **已审查、未上车**：`stm32f407vet6/` 的代码在 2026-11-21 已按主文档审查并修改，但没有上过实车。`Core/Inc/config.h` 中的参数都是初稿估值，不能当作事实引用。
+- **已归档**：`old/openmv_official/` 是旧的视觉初稿，长处已并入比赛版，只供参考。
+
+### 目录
+
+| 路径 | 内容 |
+| --- | --- |
+| `stm32f407vet6/` | 比赛固件工程（已按主文档审查，未上车） |
+| `openmv4h7plus/MAIN/main.py` | 视觉比赛脚本（`$` 帧协议，含 P 牌识别） |
+| `openmv4h7plus/openmv_debug/main.py` | 视觉调试脚本（颜色、转向识别，旧单字母协议）；`main_backup*.py` 是旧版本，只供参考 |
+| `openmv4h7plus/gimbal_debug/` | 旧云台台架脚本与《云台调试报告.md》（2026-11-23 起已取消云台，只供参考） |
+| `openmv4h7plus/openmvide/` | 安装好的 OpenMV IDE，不要修改 |
+| `old/第十四届“星火杯”赛题二细则.pdf` | 比赛规则与计分 |
+| `old/星火杯小车装车接线总表.pdf` | 2026-11-21 装车引脚与供电 |
+| `old/car_debug_log.md` | 底盘实测记录（电机档位、编码器、保护触发） |
+| `old/四路电机驱动板串口通信协议_商家答复更新版.docx` | 电机板协议的最新版；同目录另两份为旧版 |
+| `old/_20261121/motor_test_20261119/` | 旧的底盘测试工程（标准库 + Keil AC5），只用来查测试档，不再开发；《先读我.md》只在 `old/星火杯小车调试程序交接包_20261121.zip` 里 |
+| `old/赛题二实地图/`、`old/赛道视觉素材/` | 现场照片；视觉离线素材（`train/`、`validation/`，标签在 `labels.csv`） |
+| `old/` 其余文件 | 旧版交接文档、采购清单、厂商资料、压缩副本，只供查阅 |
+| `tmp/` | 文档生成脚本，以及渲染核对用的截图 |
+| `old/tof_gimbal_removed_20261123/` | 2026-11-23 换超声、取消云台时移出的 `bsp_tof.*`、`bsp_gimbal.*`，以及改动前的 config/board/main/mission_fsm/ui_pages 和文档生成脚本 |
+| `old/pcb/`、`old/worktree_20261123/` | 2026-11-23 归档：转接底板设计（原 `pcb/`，未打板，说明见其中《设计说明.md》）和当日的工程副本。比赛程序不再按转接底板走线 |
+| `立创梁山派·天空星开发板_2024-01-17.epro` | 天空星官方嘉立创 EDA 工程，排针引脚、板框、孔位以它为准 |
+
+`.packs/`、`.tools/`、`Drivers/` 是厂商或第三方代码，不要修改。
+
+## STM32 固件（`stm32f407vet6/`）
+
+这是 VS Code Keil Studio 的 CMSIS Solution 工程（csolution），用 Arm Compiler 6.24 和 STM32 HAL 1.8.6，不用 CubeMX 或 Makefile。在 `stm32f407vet6/` 目录下用 PowerShell 编译：
+
+```powershell
+.\scripts\build.ps1 -Configuration Debug      # 默认配置；同时执行 cbuild setup
+.\scripts\build.ps1 -Configuration Release
+.\scripts\build.ps1 -Configuration Debug -Rebuild
+```
+
+- 输出文件在 `out/SkyStar/SkyStar/<Debug|Release>/SkyStar.{axf,hex,bin,map}`。
+- 脚本会在 `%USERPROFILE%\.vscode\extensions\arm.cmsis-csolution-*` 和 `%USERPROFILE%\.vcpkg\artifacts` 下找 cbuild、armclang、cmake 和 ninja。找不到时，需要先在 VS Code 中激活 Arm Tools Environment。
+- `CMSIS_PACK_ROOT` 指向工程内的 `.packs/`。
+- 用 PWLink2（CMSIS-DAP）经 pyOCD 下载和调试（`--probe cmsisdap:`，csolution 里的调试器名为 `CMSIS-DAP@pyOCD`），SWD 频率 1 MHz。2026-11-23 由 ST-Link V2 改来。相关任务和调试配置在 `.vscode/tasks.json` 和 `.vscode/launch.json`，例如 `CMSIS Load`。
+- 改代码后要做三件事：
+  1. 把 9 个 `APP_RUN_MODE` 逐个编译一遍。各模式用 `#if` 隔开，只编比赛模式查不出其他模式的错误。
+  2. 跑主控状态机回放：在 `stm32f407vet6/` 下执行 `.\test\sim\run_sim.ps1`（需要主机 gcc，本机在 `C:\msys64\ucrt64\bin`）。它用 gcc 编译真实的 `mission_fsm.c`、`motion_ctrl.c`、`bsp_motor.c`、`bsp_openmv.c`、`gray_logic.c`、`sonar_logic.c`，外设换成 `test/sim/sim.c` 里的模拟件，按 1 ms 推进时钟。新的跨周期行为要在 `sim.c` 里加用例；新增被测源文件要同时加进 `run_sim.ps1`。加了修复或用例后，再跑 `python -I stm32f407vet6/test/sim/mutate.py` 做变异检查（把修复逐一撤回或写反，确认用例能抓到），新修复要在其中的 `MUTS` 里登记。
+  3. 改了相机脚本时，跑 `python -I openmv4h7plus/test/test_main_pc.py`。
+  4. 改了显示驱动或页面（`Bsp/bsp_oled.c`、`App/ui_pages.c`）时，在 `stm32f407vet6/` 下跑 `.\test\ui\run_ui.ps1`，再打开 `test/ui/out/pages.png` 看一遍。它用 gcc 编译真实的驱动和页面代码，把 SPI 字节流交给一个简化的 ST7735 模拟器，渲染出比赛页和 6 个调试页。同时检查三件事：每次 `FlushStep` 最多发一条带；内容不变时不重发；改一个数字只重发受影响的条带。新增页面要同时加进 `test/ui/render.c`。
+- 2026-11-21 的状态：显示屏换成 ST7735S 彩屏后，10 个模式编译通过，0 错误、0 警告；回放 54/54 通过；屏幕页面预览的检查全部通过。变异检查（15 处全部被抓到）和相机测试（39/39）是换屏前跑的，换屏没有改动它们覆盖的代码。以上都没有上过实板。
+- 2026-11-22：灰度新增坏通道屏蔽 `CFG_GRAY_DEAD_MASK`（当前屏蔽撞坏的 X7，即逻辑序号 6）。10 个模式编译通过，0 错误、0 警告；回放 60/60（新增第 11 组用例）；变异检查 17 处全部被抓到。
+- 2026-11-22：为转接底板把 OpenMV 串口从 USART1（PA9/PA10）改到 USART3（PD8/PD9），改了 `board.h`、`bsp_uart.c`、`stm32f4xx_it.c` 的中断函数，主文档第 2 章两处同步修订。10 个模式编译通过，C 代码 0 错误、0 警告（汇总里的 1 个警告是启动汇编的 A1950W，与改动无关）；回放 60/60。没有上过实板。
+- 2026-11-23：撤回上一条，OpenMV 串口改回 USART1（PA9/PA10），`board.h`、`bsp_uart.c/.h`、`stm32f4xx_it.c` 与 11-21 版一致，主文档第 2 章两处同步改回；灰度坏通道屏蔽等其余改动保留。改前的文件备份在 `old/usart3_backup_20261123/`。`pcb/` 与 `worktree/` 移到 `old/`。10 个模式编译通过，0 错误、0 警告；回放 60/60。同日调试连不上：ST-Link 能识别，但读不到芯片 IDCODE（100 kHz、复位下连接都一样），属接线或供电问题，与代码无关。
+- 2026-11-23：地面标定（`RUN_MODE_DBG_MOTION_CAL`）实测：指令 1000 mm 实走约 800 mm，指令 90° 实转约 45°。据此把 `CFG_WHEEL_DIAMETER_MM` 改为等效 38.4（外径实测 48），`CFG_TRACK_WIDTH_MM` 改为等效 280（几何约 175）。10 个模式编译通过，0 错误、0 警告；回放 60/60；变异检查 17 处全部被抓到。修正后还没复测。
+- 2026-11-23：实车反馈直道循迹纠偏弱、抖动大。`motion_ctrl.c` 的循迹微分改为一阶低通（`CFG_LINE_D_LPF_ALPHA`，初值 0.35），复位后第一拍不算微分；KP/KD 为用户改的 100/40。主文档生成脚本第 6.2 节和参数表同步，docx 未重新生成。10 个模式编译通过，0 错误；回放 62/62（新增第 12 组用例）；变异检查 19 处全部被抓到。没有上车。
+- 2026-11-23：`DBG_LINE_ONLY` 调试页加了左右轮目标/实测速度两行，运行时每 20 ms 从 USART6 输出一行 `毫秒,误差×100,左目标,右目标,M1..M4实测`（阻塞约 4 ms，只在该模式）。10 个模式编译通过；屏幕页面预览检查通过。
+- 2026-11-23：架空时循迹差速明显，落地基本不回正（差速转向侧滑，内侧轮被拖着走）。差速限幅 `CFG_LINE_DIFF_MAX_MM_S` 260→450；轮速环原来目标为正时 PWM 最低到 0，改为允许反向制动到 `CFG_WHEEL_BRAKE_PWM`（600，设 0 即旧行为），影响所有闭环动作。KP 为用户改的 200。10 个模式编译通过；回放 65/65（新增第 13 组）；变异检查 21 处全部被抓到。没有上车。
+- 2026-11-23：实车反馈过弯仍抖，直角弯尤甚。三处修改：丢线找线差速另限 `CFG_LINE_LOST_DIFF_MM_S`（220）；偏差降速由台阶改为主文档的连续式（`CFG_LINE_SLOW_PER_ERR` 0.12，下限 `CFG_LINE_SLOW_MIN_SCALE` 0.45）；轮速环目标正反向切换时清积分。KP/KD 100/100、制动 200 为用户所改。10 个模式编译通过；回放 68/68（新增第 14 组）；变异检查 23 处全部被抓到。没有上车。
+- 2026-11-23：丢线差速限到 220 后直角弯转不过来（之前也是转两次才过）。改为接近原地转找线：`CFG_LINE_LOST_SPEED_SCALE` 0.6→0.25，`CFG_LINE_LOST_DIFF_MM_S` 220→300，只改配置。`CFG_LINE_LOST_MAX_MM` 只在比赛状态机里生效，`DBG_LINE_ONLY` 不判 LINE_LOST。10 个模式编译通过；回放 68/68；变异检查 23 处全部被抓到。没有上车。
+- 2026-11-23：前向测距由激光 VL53L0X 换成超声 HC-SR04（PB6 Trig、PB7 Echo，TIM4_CH2 输入捕获，新增 `TIM4_IRQHandler`）；取消云台，OpenMV 固定装在车右前方，`mission_fsm.c` 的 `view_request/view_poll` 改为立即下发的 `view_set`；删去 `RUN_MODE_DBG_GIMBAL`，`DBG_TOF` 改为 `DBG_SONAR`，运行模式变为 9 个并重新编号。超声确认次数 `CFG_OBS_CONFIRM_FRAMES` 3→2（60 ms 一次，延迟与原激光相当）。整体检查顺带修了两处：`DBG_LINE_ONLY` 的 USART6 日志在 `CFG_ENABLE_DEBUG_UART=0` 时从未初始化、实际发不出去，改为该模式总是初始化；找线改成近原地转后只按 250 mm 判 LINE_LOST 要转约 440° 才停，新增 `CFG_LINE_LOST_MAX_DEG`（180）。主文档生成脚本同步，docx 未重新生成。9 个模式编译通过，0 错误（C 代码 0 警告）；回放 87/87（新增第 15、16 组，第 5 组补一项）；变异检查 29 处全部被抓到；屏幕页面预览检查通过。没有上车；相机 ROI、P 牌对齐窗要按新视角重标。
+
+**添加外设**需要改三处，漏改任何一处都会导致编译或链接失败：
+1. 在 `Core/Inc/stm32f4xx_hal_conf.h` 中启用对应的 `HAL_xxx_MODULE_ENABLED`。
+2. 把 `Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_xxx.c` 加入 `SkyStar.cproject.yml` 的 `STM32 HAL` 组。应用源文件加到 `Application` 组，驱动加到 `Bsp` 组。
+3. 在 `Core/Src/board.c` 或对应的 `Bsp/bsp_xxx.c` 中初始化。中断处理函数写在 `Core/Src/stm32f4xx_it.c`。
+
+### 代码结构
+
+- `Core/Src/main.c`：顶部用 `APP_RUN_MODE` 选择比赛模式或 8 个分步调试模式（2026-11-23 删去云台模式后重新编号，按宏名选，不要写数字）。主循环先做快速轮询（收帧、超声、按键、LED），再每 20 ms 依次执行 `Mission_Step20ms` 和 `BspMotor_ControlStep`，每 120 ms 重画一次屏幕页面（只写帧缓冲）。调试模式的屏幕页面画法放在 `App/ui_pages.c`，`main.c` 只管按键和控制逻辑。
+- `Core/Inc/config.h`：集中存放所有可调参数。值都是初稿估值，实测后回填。
+- `Core/Inc/board.h`：引脚定义，必须与装车接线总表一致。
+- `App/mission_fsm.c`：比赛状态机，依次为 IDLE → TRACK_TO_OBS → AVOID_OBS → FORK_PASS → COLOR_SCAN → PARK_SEARCH → PARK_REVERSE → DONE，另有 FAULT。主要行为：
+  - IDLE 下长按切换起跑段（FULL/AVOID/FORK/COLOR/PARK），短按起跑；起跑条件不满足时屏幕显示 `WAIT:xxx`。
+  - 中途起跑会预置总里程，并保留已锁存的方向和四色。
+  - 相机固定在车右前方（无云台），视觉任务切换后立即下发；与当前任务相同时不重发。
+  - 分岔口没有方向时先停车等待，超时才用兜底方向。
+  - 找库以 P 牌为主，经过第 4 弯后按里程兜底。
+  - 故障原因有 ENC_TMO、ENC_JUMP、ENC_STALL、MOTION_TMO、KEY_STOP、LINE_LOST（丢线超距离或找线超转角）、REJOIN_FAIL、SONAR_LOST。
+- `App/ui_pages.c`：6 个调试页面。只写帧缓冲，不读外设、不发送，所以能在电脑上渲染。版式统一：顶部是彩色标题栏（青色表示待机，绿色表示运行或在线，橙色表示标定，红色表示离线），中间主要数值用 2 倍字，底部灰字是按键提示。
+- `App/motion_ctrl.c`：循迹 PD（含丢线距离统计）、定距直行、原地定角转向。
+- `Bsp/`：串口（中断加环形缓冲）、电机、灰度、超声（HC-SR04，`bsp_sonar.c`：TIM4_CH2 双边沿捕获测回波，60 ms 触发一次，不阻塞；距离换算、中值和障碍确认在纯函数 `sonar_logic.c`，真机和回放共用）、OpenMV、显示屏（`bsp_oled.c`：1.8 寸 128×160 ST7735S 彩屏，用硬件 SPI2，横屏 160×128；函数名沿用 `BspOled_*`）。灰度的判线计算在 `gray_logic.c`，是不碰硬件的纯函数，真机和回放共用；改判线逻辑只改这里。
+
+### 引脚与板卡参数
+
+| 外设 | 引脚 |
+| --- | --- |
+| 电机板 | USART2：PA2 TX、PA3 RX，115200 |
+| OpenMV | USART1：PA9 TX → P5、PA10 RX ← P4，115200 |
+| 调试串口 | USART6：PC6/PC7，只输出（比赛禁止遥控） |
+| 灰度 | PE2/PE3/PE4 选通 → PC0 = ADC1_IN10；OUT 需不超过 3.3 V |
+| 超声 HC-SR04 | PB6 = Trig（推挽输出），PB7 = Echo（TIM4_CH2 输入捕获，AF2，下拉；FT 引脚可接 5 V）；Vcc 接 5 V |
+| 显示屏（ST7735S） | SPI2：PB13 SCK、PB15 SDA(MOSI)；PB12 CS、PB10 A0(DC)、PB11 RESET；LED 背光接 3.3 V，不接 GPIO；VCC 看模块上的 J1，没短接时接 5 V |
+| LED | PB2，高电平点亮 |
+| 按键 | PA0，按下为高电平 |
+
+时钟：HSE 8 MHz → SYSCLK 168 MHz，APB1 42 MHz（定时器时钟 84 MHz），APB2 84 MHz。CCM RAM（0x10000000）不能用作 DMA 缓冲区。
+
+电机四路顺序固定为 M1 左前、M2 左后、M3 右前、M4 右后。驱动板断开串口后会**维持上一次的输出**，所以任何死循环、HardFault 或通信中断，都可能让车继续跑。现有的安全机制如下，修改时不要破坏它们：
+- 致命异常和 `Error_Handler` 先调用 `BspMotor_PanicStop()`，直接写寄存器发零 PWM；
+- 独立看门狗约 300 ms，在 `system_poll_fast` 里喂狗，新写的主循环必须调用它；
+- 反馈超时急停；
+- 计数跳变急停；
+- 超声过期（`CFG_SONAR_STALE_MS` 内没收到完整回波）视为失效，避障窗口内报 SONAR_LOST；
+- 某轮有目标速度却持续不动（计数冻结或堵转）报 ENC_STALL；定距、定角动作超时报 MOTION_TMO。计数冻结时所有按里程判断的保护都会失效，所以这两条不能删；
+- 屏幕用 `BspOled_FlushStep()` 每次只发一条 8 行条带（约 2 ms）：比赛模式每 20 ms 调一次，调试模式每圈主循环调一次。会阻塞的 `BspOled_Flush()` 发整屏约 35 ms，只在初始化时用，不要放进任何主循环。屏只能写、不能读，`BspOled_IsOnline()` 为真不代表屏真的接好。方向、红蓝、反色、偏移和 SPI 分频都在 `config.h` 的 `CFG_TFT_*` 里改。
+
+## 视觉协议（定稿，见交接文档第 4 章）
+
+主控与 OpenMV 之间统一使用 `$...#` 文本帧，帧体不超过 63 字节，结尾的 `\r\n` 会被忽略。
+
+- 主控 → 相机：`$CMD:IDLE#`、`$CMD:TURN#`、`$CMD:COLOR#`、`$CMD:PARK#`、`$CMD:RESET#`、`$CMD:QUERY#`，以及续接用的 `$CMD:COLOR:R-G#`。
+- 相机 → 主控：`$ACK:<任务>#`、`$HB:<任务>,<fps>#`（每 500 ms 一次）、`$TURN:L#`/`$TURN:R#`、`$COLOR:<n>,R-G-B-Y#`、`$PARK:<0|1>,<cx>,<area>#`。flag 只能是 0 或 1；cx 取 −100～100；area 按 160×120 分辨率折算，取 0～19200。
+
+两端都已按这套协议实现：主控 `Bsp/bsp_openmv.c`，相机 `openmv4h7plus/MAIN/main.py`。协议层和跨周期行为在电脑上测试过（相机脚本测试、主控状态机回放），没有在实物上联调过。主控只收以 `$` 开头的帧，并且每种帧都严格解析，任何字段不合法就整帧丢弃（`bad_frame_count` 计数）；四色帧的新序列必须以已有序列开头；相机重启后主控用 `$CMD:COLOR:<已有序列>#` 让相机续接；心跳报告的任务与要求不符时主控会重发；P 牌以最新一帧为准。改协议时两端和主文档第 4 章要一起改。
+
+## OpenMV 视觉脚本
+
+- **比赛版** `openmv4h7plus/MAIN/main.py`：
+  - `MODE = "RACE"` 时只听主控命令，不画调试信息，也不用屏。
+  - `MODE = "DEBUG"` 时，收到主控命令之前按 `DEBUG_TASK` 运行，可以脱离主控单独调参。
+  - 协议层（`Link`、`App`）不依赖 OpenMV 模块，可以在电脑上 import 测试。
+  - P 牌识别（`find_park`）：要求四角为蓝色、宽高比放宽到 0.6～1.5（侧视会有透视压缩）、中部白色占比在 8%～65%，并且连续 `PARK_CONFIRM` 帧看到才上报 flag=1。阈值 `TH_PARK` 暂用转向牌的阈值，必须按实物重新调。
+- **调试版** `openmv4h7plus/openmv_debug/main.py`：仍是旧的单字母协议，只用来调阈值。调好的阈值要抄到比赛版。
+
+以下说明对两个版本的识别部分都适用：
+
+这是 MicroPython 脚本，用 OpenMV IDE 运行或保存到板上。
+
+- 文件开头是给人手动调参的开关和参数区：`MODE`（`"DEBUG"` 或 `"RACE"`）、`COLOR_ON`/`TURN_ON`，以及 LAB 阈值和 ROI。阈值和 ROI 按 **160×120** 填写，代码会根据 `FRAME_SIZE` 乘以系数 `K` 自动换算。
+- **颜色顺序**：先在 ROI 内用 `find_blobs` 按四组阈值找色块，色块的 code 分别为 1/2/4/8。找不到时，用 9 个采样点的色相投票补充。`Counter` 要求连续 `CONFIRM` 帧颜色相同才记一块，两块之间要有 `CLEAR` 帧空框。
+- **转向标志**：深蓝圆牌加白色箭头。比较箭头上半部和下半部白色像素的平均 x 坐标，`dx` 小于 0 为左转。经 `TurnFilter` 连续确认后输出。
+- `sensor`、`image`、`pyb`、`display` 这几个模块都在 `main()` 内部导入，所以文件在 PC 上也能 import，可以离线测试识别函数。测试时需要自己模拟 `img`，素材在 `old/赛道视觉素材/`。

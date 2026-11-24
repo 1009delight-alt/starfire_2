@@ -1,0 +1,531 @@
+// 生成《星火杯赛题二比赛程序开发交接文档_v2.docx》
+// 运行：NODE_PATH=<含 docx@9 的 node_modules> node tmp/build_handover_doc_v2.js
+const fs = require("fs");
+const path = require("path");
+const {
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun,
+  AlignmentType, WidthType, ShadingType, BorderStyle, Footer, PageNumber,
+  HeadingLevel, LevelFormat, TableOfContents, TableBorders,
+} = require("docx");
+
+const ROOT = path.resolve(__dirname, "..");
+const OUT = process.env.HANDOVER_OUT || path.join(ROOT, "星火杯赛题二比赛程序开发交接文档_v2.docx");
+const IMG_DIR = process.argv[2]; // 原文档解出的 media 目录（可选）
+
+const FONT = "Microsoft YaHei";
+const MONO = "Consolas";
+const C_TITLE = "163B50", C_H1 = "163B50", C_H2 = "195767", C_NOTE = "506773";
+const C_HEAD_FILL = "D9EAED", C_ALT_FILL = "F0F5F6", C_BORDER = "B6CDD3", C_WARN = "B65608";
+const CONTENT_W = 9468; // A4 11906 - 左右边距 1219*2
+
+// ---------- 基础构件 ----------
+function runs(text, opt = {}) {
+  // 支持 **粗体** 与 `代码`
+  const out = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(new TextRun({ text: text.slice(last, m.index), font: FONT, ...opt }));
+    const tok = m[0];
+    if (tok.startsWith("**")) out.push(new TextRun({ text: tok.slice(2, -2), font: FONT, bold: true, ...opt }));
+    else out.push(new TextRun({ text: tok.slice(1, -1), font: { ascii: MONO, hAnsi: MONO, eastAsia: FONT }, size: (opt.size || 20) - 1, color: "1F497D" }));
+    last = m.index + tok.length;
+  }
+  if (last < text.length) out.push(new TextRun({ text: text.slice(last), font: FONT, ...opt }));
+  return out;
+}
+const P = (text, opt = {}) => new Paragraph({ children: runs(text, opt.run || {}), spacing: { after: 100, line: 300 }, ...(opt.para || {}) });
+const H1 = (t) => new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun({ text: t, font: FONT })] });
+const H2 = (t) => new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun({ text: t, font: FONT })] });
+const BUL = (t) => new Paragraph({ numbering: { reference: "bul", level: 0 }, children: runs(t), spacing: { after: 60, line: 290 } });
+const NUM = (t, ref = "num") => new Paragraph({ numbering: { reference: ref, level: 0 }, children: runs(t), spacing: { after: 60, line: 290 } });
+function NOTE(label, text, color = C_NOTE) {
+  return new Paragraph({
+    children: [new TextRun({ text: label + "　", font: FONT, bold: true, color, size: 18 }), ...runs(text, { size: 18, color })],
+    spacing: { before: 60, after: 140, line: 280 },
+  });
+}
+function CODE(lines) {
+  return lines.map((l, i) => new Paragraph({
+    children: [new TextRun({ text: l === "" ? " " : l, font: { ascii: MONO, hAnsi: MONO, eastAsia: FONT }, size: 17 })],
+    shading: { type: ShadingType.CLEAR, fill: "F4F6F7", color: "auto" },
+    spacing: { after: 0, line: 250, before: i === 0 ? 60 : 0 },
+    indent: { left: 120, right: 120 },
+  })).concat([new Paragraph({ children: [], spacing: { after: 80 } })]);
+}
+
+const cellBorder = { style: BorderStyle.SINGLE, size: 4, color: C_BORDER };
+function T(widthsPct, rows, opt = {}) {
+  const widths = widthsPct.map((w) => Math.round((CONTENT_W * w) / 100));
+  widths[widths.length - 1] = CONTENT_W - widths.slice(0, -1).reduce((a, b) => a + b, 0);
+  const trs = rows.map((r, ri) => new TableRow({
+    tableHeader: ri === 0,
+    cantSplit: true,
+    children: r.map((c, ci) => new TableCell({
+      width: { size: widths[ci], type: WidthType.DXA },
+      shading: { type: ShadingType.CLEAR, color: "auto", fill: ri === 0 ? C_HEAD_FILL : (ri % 2 === 0 ? C_ALT_FILL : "FFFFFF") },
+      margins: { top: 70, bottom: 70, left: 100, right: 100 },
+      borders: { top: cellBorder, bottom: cellBorder, left: cellBorder, right: cellBorder },
+      children: String(c).split("\n").map((line) => new Paragraph({
+        children: runs(line, { size: 18, bold: ri === 0 || (opt.boldFirstCol && ci === 0) }),
+        spacing: { after: 20, line: 260 },
+      })),
+    })),
+  }));
+  return [new Table({ width: { size: CONTENT_W, type: WidthType.DXA }, columnWidths: widths, rows: trs }),
+    new Paragraph({ children: [], spacing: { after: 100 } })];
+}
+function IMG2(files, captions) {
+  if (!IMG_DIR) return [];
+  const w = Math.floor((CONTENT_W / 1440) * 96 / 2) - 8;
+  const h = Math.round(w * 0.75);
+  const cells = files.map((f, i) => new TableCell({
+    width: { size: CONTENT_W / 2, type: WidthType.DXA },
+    borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
+    children: [
+      new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ type: "jpg", data: fs.readFileSync(path.join(IMG_DIR, f)), transformation: { width: w, height: h } })] }),
+      new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: captions[i], font: FONT, size: 17, color: C_NOTE })], spacing: { after: 60 } }),
+    ],
+  }));
+  return [new Table({ borders: TableBorders.NONE, width: { size: CONTENT_W, type: WidthType.DXA }, columnWidths: [CONTENT_W / 2, CONTENT_W / 2], rows: [new TableRow({ children: cells })] }),
+    new Paragraph({ children: [], spacing: { after: 100 } })];
+}
+
+// ---------- 正文 ----------
+const body = [];
+const add = (...xs) => xs.forEach((x) => (Array.isArray(x) ? body.push(...x) : body.push(x)));
+
+add(new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun({ text: "星火杯赛题二比赛程序开发交接文档", font: FONT })] }));
+add(new Paragraph({ children: [new TextRun({ text: "基于光电导航的智能移动测量小车　｜　第 3 版　｜　2026 年 11 月 21 日", font: FONT, size: 18, color: C_NOTE })], spacing: { after: 200 } }));
+add(P("按键一次后，由 STM32F407VET6 决定当前赛段、车速和停车时机；OpenMV 按主控指定的任务上报路牌、四色顺序和 P 牌位置；四路电机板执行四轮命令，并回报编码器累计计数。本册是比赛程序的**规范**：规定程序要做什么、两条串口怎么通信、各段用什么算法和判据，以及怎样标定和验收。"));
+add(NOTE("依据等级", "本册只把细则、装车接线总表、`old/car_debug_log.md` 的实测记录、商家答复和现场照片当作事实依据。`stm32f407vet6/` 的代码原本是照资料写的初稿，11 月 21 日已按本册审查并修改（见第 9.4 节），全部运行模式都能编译通过，但**仍未上过实车**。旧的视觉初稿已归档到 `old/openmv_official/`，长处已并入比赛版。代码中的参数一律是“初稿值”，必须实测后回填。代码与本册不一致时，以本册为准，并修改代码。", C_WARN));
+
+add(H2("版本记录"));
+add(T([22, 78], [
+  ["版本／变更", "内容"],
+  ["第 3 版补充（11 月 23 日）", "前向测距由激光 VL53L0X 换成超声 HC-SR04（PB6 = Trig，PB7 = Echo，TIM4_CH2 输入捕获，第 2 章）。取消云台，OpenMV 固定装在车右前方，视觉任务切换后立即下发，不再等舵机稳定；删去云台调试模式，运行模式由 10 个减为 9 个。丢线保护增加转角上限 `CFG_LINE_LOST_MAX_DEG`（第 6.2 节）。"],
+  ["第 3 版补充（11 月 21 日）", "车载显示屏由 I²C OLED（SSD1306）换成 1.8 寸 128×160 SPI 彩屏（ST7735S），改用硬件 SPI2（PB10～PB13、PB15，第 2 章）。比赛页面按 160×128 重排，四色用 3 倍字号、每个字母用对应颜色；7 个调试页面全部放大重排到 `App/ui_pages.c`，调试模式也改为每圈最多发一条带，不再阻塞电机控制（第 5.4 节）。新增屏幕页面电脑预览（第 9.5 节）。"],
+  ["第 3 版", "**按本册审查并修改了主控初稿**：补上致命异常停车、看门狗、OLED 分页刷新、激光过期判断、编码器计数跳变处理；实现了丢线保护、分岔停车等方向、回线连续确认、云台稳定后再下发视觉任务、找库里程兜底、运行时选段起跑和起跑前检查（第 5.5 节、第 9.4 节）。资料目录整理到 `old/`，本册路径同步更新。之后按外部审查补修了 6 处跨周期缺陷（相机重启不恢复任务、残帧锁死四色、切回 COLOR 重复计数、计数冻结无保护、分岔重跑沿用旧方向、P 牌丢失不撤销），并新增状态机电脑回放（第 9.5 节）。第二轮审查后又补了三项：所有帧类型都严格解析（非法 P 牌帧曾能直接触发倒库）；四色续接（`$CMD:COLOR:<序列>#`，相机重启后从下一块接着数）；灰度判线拆成纯函数 `gray_logic.c`，回放可以检查分岔左右选线和轮速差。新增 OpenMV 比赛版脚本 `openmv4h7plus/MAIN/main.py`，按第 4 章协议实现（第 4.4 节），并吸收了旧视觉初稿（已归档到 `old/openmv_official/`）的 P 牌判据、连续帧确认和满 4 色后停止识别。"],
+  ["第 2 版", "下面五行是第 2 版相对第 1 版的变更。"],
+  ["　固件载体", "比赛固件写在 `stm32f407vet6/` 工程里（STM32 HAL、CMSIS Solution、Arm Compiler 6）。`old/_20261121/motor_test_20261119` 的标准库工程只用来查底盘测试档和复现条件。"],
+  ["　视觉协议", "定稿为 `$` 帧协议（第 4 章），主控和 OpenMV 两端都按本章实现。OpenMV 脚本需要改写收发层，并新增 P 牌识别和心跳。原来的单字母 S/R/Q/T 协议只在调试台架上使用。"],
+  ["　找库判据", "以 P 牌为主、里程为兜底。看到 P 牌并对齐后触发入库；超过里程窗口仍未看到 P 牌，就按里程触发，尽量保住部分入库分。"],
+  ["　新增章节", "规则硬约束、赛道几何先验、软件架构、控制算法、中途重启、参数总表、代码缺口清单。"],
+  ["　结构调整", "原来的“底盘为何提前停车”“装车后重新验证视觉和云台”两章是调试记录，移到附录 A、B。"],
+]));
+
+add(new Paragraph({ children: [new TextRun({ text: "目录", font: FONT, size: 28, bold: true, color: C_H1 })], spacing: { before: 320, after: 140 } }));
+add(new TableOfContents("目录", { hyperlink: true, headingStyleRange: "1-2" }));
+add(NOTE("提示", "在 Word 中右键目录，选择“更新域”，即可刷新页码。"));
+
+// ===== 1 =====
+add(H1("1　比赛目标与规则约束"));
+add(H2("1.1　五项得分分别要看到什么"));
+add(T([14, 46, 40], [
+  ["项目", "裁判可见的结果", "程序对应的责任"],
+  ["循迹 20 分", "连续通过前两弯，车身垂直投影始终有部分留在线内。只过一弯得 0 分。", "灰度标定、循迹 PD、弯道限速、丢线找回。"],
+  ["避障 20 分", "绕开并回到黑线得 20 分，只绕开得 10 分，碰到障碍扣 10 分。", "超声触发、四段绕行几何、回线判据。"],
+  ["路牌 25 分", "按当轮随机的左／右箭头，实际驶入对应支路。", "右前方固定相机读牌、方向锁存、偏置寻线。"],
+  ["四色 20 分", "按行驶方向，每个位置显示正确得 5 分。结果要一直保持到裁判记录完。", "COLOR 任务、显示屏按位置显示、结果永不被覆盖。"],
+  ["入库 15 分", "车尾先入，车身完全入库后静止至少 5 秒。没有完全入库扣 10 分，完全没入库得 0 分。", "P 牌触发、里程兜底、转向与倒车距离、停稳计时。"],
+]));
+
+add(H2("1.2　规则硬约束（违反即失分或取消成绩）"));
+add(T([26, 40, 34], [
+  ["约束", "细则原意", "程序／装车如何满足"],
+  ["车体尺寸", "任何时刻垂直投影不超过 40 × 35 cm，高度不超过 40 cm（第 3.2.1 节）。", "相机固定在车右前方，装好后量一次外廓即可。"],
+  ["导航方式", "严禁用非光电技术导航和识别，超声波除外（第 3.2.2 节）。", "赛道与目标只靠灰度、超声（细则明确允许）和相机判断。编码器只用于速度环、定距和定角，不单独决定赛段。"],
+  ["禁止遥控", "全程严禁遥控，一经发现取消资格（第 3.2.3 节）。", "比赛时不接无线模块。调试串口 USART6 只输出、不收命令。按键只负责启动、急停和选段。"],
+  ["绕障方式", "必须在避让区内完成：以障碍为中心，左右、前后各 50 cm。**不能以“大转弯”的形式绕开**（第 4.3.2 节）。", "采用四段折线绕行，每次转角小于 90°，侧移量按第 6.4 节公式核算，全程留在避让区内。"],
+  ["四色显示", "以车载设备实际显示为准，口头报告不计分。比赛前要主动向工作人员说明观测和处理方法，比赛结束后再展示一遍（第 4.3.3 节、第 5.1 节注）。", "显示屏持续显示到断电。准备一段 30 秒口述，见第 9.3 节。"],
+  ["出发区", "以起点线为基准，前后各约 30 cm（第 3.3.2 节）。", "里程原点取按键起跑的位置，几何先验按“起点线 ±30 cm”留余量。"],
+  ["时间与调整", "现场调试不超过 5 分钟，比赛 5 分钟。最多可调整三次，每次扣 5 分且计入用时，可以重做或跳过某一项（第 4.2 节、第 5.2 节）。", "一键启动；支持从指定赛段启动（第 7 章）；参数可在开机时选组（第 8.1 节）。"],
+  ["停表", "倒车入库停稳 5 秒后停表，同分按用时排名（第 5.3 节）。", "`CFG_PARK_HOLD_MS` 取 5500 ms。各段速度在稳定的前提下尽量提高。"],
+]));
+add(NOTE("口径待核", "第 4.1 节概述还提到出库和回到起点，但第 5.1 节评分表没有给这两项分值，赛前向裁判确认。另外，第 3.3.7 节文字写车库在“赛道外侧”，示意图却画在环内侧顶直道下方。以现场实地为准，入库转向方向做成参数 `CFG_PARK_TURN_ANGLE_DEG`。"));
+
+add(H2("1.3　赛道几何先验"));
+add(P("按图 3.3.1 的比例估算。小车从右上方起点出发，顺时针行驶。下表的累计里程用来设置赛段门控窗口，防止在别的赛段误触发；赛段切换本身仍以光电观测为准。每个 R30 圆角比直角少走约 13 cm，已经扣除。"));
+add(T([30, 18, 52], [
+  ["位置（按行驶顺序）", "累计里程估算", "说明"],
+  ["起点线", "0 m", "离左端约 3.1 m，离右上角约 1.4 m。"],
+  ["第 1 弯（右上）→ 右直道", "约 1.3 m", "循迹项要求连续通过前两弯。"],
+  ["第 2 弯（右下）→ 下直道", "约 4.4 m", "过了这里才允许超声触发避障。"],
+  ["障碍物中心", "约 5.1 m", "离右端约 100 cm，是 10 cm 方块，中心压在黑线上。避让区为前后、左右各 ±50 cm。"],
+  ["分岔牌／菱形分岔区", "约 6.2～6.9 m", "在下直道中部，菱形边长约 50 cm，交通牌在中央。"],
+  ["第 3 弯（左下）→ 左直道", "约 8.5 m", "出分岔窗口后停掉转向识别。"],
+  ["四个色块", "约 9.3～10.4 m", "在行进方向右侧，离线约 25 cm，是 10 cm 方块，从下往上依次为第 1～4 位。"],
+  ["第 4 弯（左上）→ 顶直道", "约 11.4 m", "适合做里程重标定的基准点（第 6.6 节）。"],
+  ["P 牌", "约 13.1 m", "离左端约 180～200 cm，在库口旁，库线 U 形，开口朝向主线。"],
+  ["车库中心", "约 13.6 m", "40 × 40 cm。车尾先入。"],
+  ["回到起点", "约 14.5 m", "整圈长度估算。"],
+]));
+add(NOTE("用法", "现场先用 `RUN_MODE_DBG_LINE_ONLY` 低速跑一整圈，记下每个特征点的实际 `total_dist_mm`，再回填第 8 章的门控参数，不要直接使用上表的估算值。"));
+
+// ===== 2 =====
+add(H1("2　整车分工与接口分配"));
+add(P("下表采用 11 月 21 日的装车接线总表。已在车上验证过的只有电机串口通信、编码器回传和早期的按键起停；视觉串口、灰度、超声和显示屏接好后需要分别验收。初稿的 `Core/Inc/board.h` 也要逐个引脚对照本表核对。"));
+add(T([17, 38, 45], [
+  ["对象", "主控端连接", "程序要求"],
+  ["四路电机板", "USART2：PA2 TX → RX2；TX2 → PA3 RX。共地。115200 8N1。", "上电订阅累计计数 `$upload:1,0,0#`；驱动板可能比主控晚上电，没收到回传就每 500 ms 补发一次。速度控制方式见第 6.1 节。"],
+  ["OpenMV H7 Plus", "USART1：PA9 TX → P5 RX；P4 TX → PA10 RX。相机端为 UART3。共地。", "使用 `$` 帧协议（第 4 章）。超过 1.5 s 收不到任何合格帧，就判为离线。"],
+  ["八路灰度", "PE2/PE3/PE4 → AD0/AD1/AD2；OUT → PC0（ADC1_IN10）。模块供电 5 V。", "轮流选通 8 路，每路等信号稳定后再做 ADC 采样，稳定时间需实测。OUT 的最高电压确认不超过 3.3 V 之后才接 PC0。模拟量还是数字量、黑白极性、通道顺序都要实测。"],
+  ["前向超声", "HC-SR04：Vcc 接 5 V，GND 共地；PB6 = Trig（推挽输出），PB7 = Echo（TIM4_CH2，AF2，双边沿输入捕获，内部下拉）。Echo 是 5 V 输出，PB7 为 5 V 容忍引脚，可直接接，保险起见串 1 kΩ。原云台的 PB8/PB9 不再使用。", "每 60 ms 触发一次（10 µs 以上高电平），TIM4 以 1 MHz 计回波宽度，距离 = 宽度 × 0.1715 mm/µs。无目标时回波约 38 ms 后落下，记为空旷（2000 mm），算正常读数；触发后收不到回波或回波卡高不更新时间戳。读数经 3 点中值后连续几次不超过触发距离才算有障碍；过期（没有新回波）时不能当作前方畅通。"],
+  ["车载显示屏", "2026-11-21 换成 1.8 寸 128×160 SPI 彩屏（ST7735S），硬件 SPI2：PB13 = SCK，PB15 = SDA，PB12 = CS，PB10 = A0，PB11 = RESET；LED（背光）接 3.3 V，VCC 按模块上 J1 的状态接 5 V 或 3.3 V。", "上电核对方向、红蓝和偏移（`CFG_TFT_*`）。比赛页面见第 5.4 节。"],
+  ["按键／灯／调试", "PA0 KEY，按下为高电平；PB2 LED。PA13、PA14 留给 SWD。PC6/PC7 预留调试串口。", "按键消抖，区分短按和长按，必须“先松开再按下”才算启动，冷启动时车不动。LED 用不同闪烁模式区分待机、运行、完成和故障。"],
+]));
+add(NOTE("供电条件", "VET6 由外部稳压 5 V 供电时，断开 ST-LINK 的供电输出。驱动板 5 V 输出最大约 0.7 A，不能作为整车 5 V 电源。灰度 OUT 实测超过 3.3 V 时，先做电平转换。超声模块接 5 V（3.3 V 供电时多数 HC-SR04 不工作）；显示屏背光不接 GPIO，直接接 3.3 V。"));
+
+// ===== 3 =====
+add(H1("3　电机串口如何收发和判定有效"));
+add(P("YB-ESF01-V2.0 使用 3.3 V TTL、115200、8N1。主控发送 ASCII 字节，从 `$` 到 `#` 是一帧，不需要附加回车换行。四个字段从左到右始终对应 M1～M4，即左前、左后、右前、右后。"));
+add(T([20, 40, 40], [
+  ["用途", "主控发送／驱动板返回", "主控处理"],
+  ["读配置与电压", "发 `$read_flash#` 或 `$read_vol#`；电压返回形如 `$Battery:7.40V#`。", "等驱动板启动输出结束后再分开查询。电压显示在显示屏上，低于 7.0 V 时提示换电池。"],
+  ["订阅累计计数", "发 `$upload:1,0,0#`；收 `$MAll:-417,0,0,0#`。", "三个开关依次是累计、10 ms 增量、速度。收到第一条有效累计帧时建立本轮基线。"],
+  ["增量与轮速", "开启对应上报后收 `$MTEP:a,b,c,d#` 或 `$MSPD:a,b,c,d#`。", "MSPD 的单位是 mm/s，但它按驱动板内部的轮径和线数换算，而这两个参数与实车不符，所以建议主控用累计计数自己差分出轮速。"],
+  ["开环与速度命令", "`$pwm:a,b,c,d#`（每路 −3600～3600）或 `$spd:a,b,c,d#`（每路 −1000～1000 mm/s）。", "两种命令都没有逐条 ACK。选用哪种方式见第 6.1 节。"],
+  ["停车", "`$pwm:0,0,0,0#` 或 `$spd:0,0,0,0#`。", "零 PWM 会释放保持力矩。驱动板断开串口后会维持上一条输出，所以停车要靠反馈超时急停（300 ms）和可以切断的动力电源两层保护。"],
+]));
+add(H2("3.1　接收与里程换算"));
+add(P("按 `$` 和 `#` 拆帧，新帧头可以重新同步；字段个数和数值格式不对、或者帧过长时直接丢弃。只有合格的 `$MAll` 帧才能刷新 `last_rx_ms`。运动中 `CFG_MOTOR_RX_TIMEOUT_MS`（300 ms）内没有收到合格帧，就置 `rx_timeout_fault`，状态机随即急停。"));
+add(CODE([
+  "fwd_enc[i]  = raw_enc[i] × CFG_ENC_SIGN_Mi            // 逐轮方向系数，必须实测",
+  "dist_i (mm) = Δfwd_enc[i] ÷ CFG_ENC_COUNTS_PER_MM      // = 每圈计数 ÷ (π × 实测轮径)",
+  "左侧 = (M1 + M2)/2，右侧 = (M3 + M4)/2",
+  "seg_dist  += (左 + 右)/2",
+  "seg_yaw   += (右 − 左) ÷ CFG_TRACK_WIDTH_MM × 57.296   // 四轮差速打滑，轮距必须用“等效值”标定",
+]));
+add(NOTE("依据", "《四路电机驱动板串口通信协议_商家答复更新版》第 3、5、7 节；`old/car_debug_log.md` 11 月 19～20 日的记录。"));
+
+// ===== 4 =====
+add(H1("4　视觉串口协议（定稿 v1.1）"));
+add(P("本章是两端共同遵守的定稿规范。主控按赛段指定相机当前的**任务**，相机只执行这一项识别，其他识别关闭，这样不同赛段的目标不会互相误触发。两端都已按本章实现：主控 `Bsp/bsp_openmv.c`，相机 `openmv4h7plus/MAIN/main.py`。v1.1 相对 v1 增加了四色续接命令 `$CMD:COLOR:<序列>#`，并规定每种帧都严格解析。"));
+add(H2("4.1　帧格式"));
+add(BUL("ASCII 文本。帧以 `$` 开头、`#` 结尾，帧体不超过 63 字节。帧后可以跟 `\\r\\n`，接收方忽略回车换行。"));
+add(BUL("收到 `$` 就清空缓冲，重新开始收帧；超长帧整帧丢弃。两端都按这个规则解析。"));
+add(BUL("115200、8N1。主控 USART1，相机 UART3。"));
+add(BUL("主控只接收以 `$` 开头的帧；`#` 之后、下一个 `$` 之前的字节一律丢弃。"));
+add(BUL("**每种帧都严格解析**：字段个数、取值范围、分隔符都要对，后面不能有多余字符；任何一处不合法就整帧丢弃，状态不变（计入 `bad_frame_count`），也不刷新在线状态。电机串口的 `$MAll` 同样要求第 4 个数后正好是 `#`。"));
+add(H2("4.2　主控 → 相机"));
+add(T([26, 74], [
+  ["命令", "相机必须执行的动作"],
+  ["`$CMD:IDLE#`", "停止全部识别，只发心跳。回 `$ACK:IDLE#`。"],
+  ["`$CMD:TURN#`", "清除上一次的方向结果，只开转向识别。回 `$ACK:TURN#`。"],
+  ["`$CMD:COLOR#`", "开始四色计数，相当于旧协议的 S；**不清除**已经记录的顺序。回 `$ACK:COLOR#`。"],
+  ["`$CMD:PARK#`", "只开 P 牌识别。回 `$ACK:PARK#`。"],
+  ["`$CMD:RESET#`", "清除方向、颜色和 P 牌全部结果，回到 IDLE。回 `$ACK:IDLE#`。"],
+  ["`$CMD:QUERY#`", "立即补发一次当前任务的结果帧（TURN、COLOR 或 PARK）和一条心跳。"],
+  ["`$CMD:COLOR:<序列>#`", "续接，例如 `$CMD:COLOR:R-G#`。主控因相机重启而重发 COLOR、并且手里已有 1～3 个颜色时使用。相机：自己的顺序是该序列的开头（含刚重启、顺序为空）→ 采用该序列，并先看到空框再计下一块；相机领先（该序列是自己顺序的开头）→ 保留自己的并立即补发一次；两者矛盾 → 以主控为准。回 `$ACK:COLOR#`。序列不合法时整条命令忽略。"],
+]));
+add(P("主控发出命令后，如果 300 ms（`CFG_OPENMV_CMD_RETRY_MS`）内没有收到对应的 ACK 或心跳，就重发。所以相机对同一条命令重复执行必须没有副作用。另外，如果相机心跳报告的任务与主控要求的不一致（例如相机重启后回到 IDLE），主控会把“待确认”重新置起并重发当前任务。"));
+add(H2("4.3　相机 → 主控"));
+add(T([30, 70], [
+  ["帧", "含义与发送时机"],
+  ["`$ACK:<任务>#`", "确认已经切换到该任务。"],
+  ["`$HB:<任务>,<fps>#`", "每 500 ms 发一次，开机就绪后立即先发一条。主控据此判断在线状态和当前任务；任务不符时主控重发当前任务。"],
+  ["`$TURN:L#` / `$TURN:R#`", "方向连续 `TURN_CONFIRM` 帧一致后才发。确认之后每 200 ms 重发一次，直到任务切走，防止丢帧。"],
+  ["`$COLOR:<n>,<序列>#`", "n 为 1～4，序列如 `R-G` 或 `R-G-G-Y`，只用 R/G/B/Y，允许相邻同色。每新记一块就发一次，满 4 块后每 200 ms 重发一次。主控只接受格式严格合法的帧：n 为 1～4，序列恰好 n 个颜色、以 `-` 分隔、没有多余字符，n 不小于已收到的数量，并且新序列必须以已收到的序列开头（相机重启后重新计数的结果不会覆盖已有答案）。满 4 块后锁存。"],
+  ["`$PARK:<1|0>,<cx>,<area>#`", "PARK 任务下每帧都发。cx 是 P 牌中心的水平位置，归一化到 −100～+100，正值表示在画面右侧。area 是蓝色方牌的像素数，**按 160 × 120 分辨率折算**。flag 只能是 0 或 1，cx 必须在 −100～100，area 必须在 0～19200，后面不能有多余字符。1 表示相机已连续 `PARK_CONFIRM` 帧看到 P 牌。主控**以最新一帧为准**：收到 flag=0 立即撤销“看见 P 牌”。"],
+]));
+add(H2("4.4　OpenMV 比赛版脚本"));
+add(P("比赛版脚本是 `openmv4h7plus/MAIN/main.py`，由 `openmv_debug/main.py` 派生，识别函数、`Counter` 和 `TurnFilter` 与调试版一致。调参先在调试版里做，再把阈值抄过来。已实现："));
+add(NUM("收发层：`Link` 按 `$...#` 拆帧（`$` 重新同步、回车换行忽略、超过 63 字节整帧丢弃）；`App` 用 `task` 变量代替 `COLOR_ON`/`TURN_ON`，每帧只跑当前任务的识别。重复收到同一任务命令只回 ACK，不清结果。", "numA"));
+add(NUM("心跳：开机完成后立即发一条 `$HB:IDLE,0#`，之后每 500 ms 发一次。", "numA"));
+add(NUM("P 牌识别（`find_park`）：蓝色色块宽高比在 0.6～1.5 之间（侧视会有透视压缩），最短边不小于 10 像素（按 160×120），4 个内缩 1/8 的角点中至少 3 个是蓝色（圆形转向牌的四角不是蓝色），牌中部白色像素占中部面积的 8%～65%（太白的是白板之类）。还要连续 `PARK_CONFIRM`（4）帧看到才上报 flag=1，丢一帧立即回到 0，防止单帧误检触发入库。阈值 `TH_PARK` 暂时沿用 `TH_SIGN`，**必须按实物重新调**。", "numA"));
+add(NUM("四色续接：收到 `$CMD:COLOR:<序列>#` 时按第 4.2 节的规则采用或保留顺序（`App.color_resume`）。", "numA"));
+add(NUM("不依赖 SPI 屏：`MODE = \"RACE\"` 时不创建屏幕对象；调试模式开 `LCD_IN_DEBUG` 才用屏，没接屏也能启动。", "numA"));
+add(NUM("调试模式（`MODE = \"DEBUG\"`）：收到主控命令前按 `DEBUG_TASK` 运行，画面叠加识别细节，可以脱离主控单独调参。", "numA"));
+add(NUM("开机锁定曝光和增益（`EXPOSURE_US`/`GAIN_DB`），避免地布反光导致颜色漂移。", "numA"));
+add(NOTE("已验证", "11 月 21 日在电脑上测试了脚本的协议层（拆帧、任务切换、确认与重发、四色含相邻同色、P 牌连续帧确认、RESET、心跳，共 31 项，含“切走再切回 COLOR 不重复计数”），并在主控状态机回放中覆盖了相机重启、残帧、旧结果残留等跨周期场景（第 9.5 节），全部通过。**识别部分（尤其是 P 牌）还没有在实物上跑过。**"));
+add(NOTE("验收", "台架用 OpenMV 联调模式（第 9.1 节）按键轮流切换 IDLE/TURN/COLOR/PARK，检查四件事：显示屏上的 ACK 任务、fps、方向和颜色序列是否随实物变化；拔掉相机 1.5 s 内是否显示离线；半帧、连发两帧、超长帧是否都不会误触发；相机重启后主控重发命令能否恢复。"));
+
+// ===== 5 =====
+add(H1("5　主控软件架构"));
+add(H2("5.1　工程与构建"));
+add(P("VS Code Keil Studio 的 CMSIS Solution 工程，使用 Arm Compiler 6.24 和 STM32 HAL 1.8.6。在 `stm32f407vet6/` 下用 PowerShell 执行 `.\\scripts\\build.ps1 -Configuration Debug`，产物在 `out/SkyStar/SkyStar/Debug/`；用 ST-Link 经 pyOCD 下载，SWD 频率 1 MHz。新增外设要同时改三处：`Core/Inc/stm32f4xx_hal_conf.h` 里的模块开关、`SkyStar.cproject.yml` 里的源文件，以及 `board.c` 里的初始化。工程 README 记录的已验证内容，只有 11 月 16 日的 LED 和按键示例编译通过。"));
+add(H2("5.2　模块分层"));
+add(P("下表规定比赛固件的模块划分和职责。最右一列是初稿中对应的文件，只用来说明代码落在哪里，审查时逐个对照本册修改。"));
+add(T([20, 50, 30], [
+  ["模块", "职责（规范）", "初稿中的对应文件"],
+  ["主入口", "选择运行模式（比赛／各分步调试），完成初始化和主循环调度。", "`Core/Src/main.c`"],
+  ["集中参数", "**全部可调参数集中在一个头文件里**。现场只改这个文件和运行模式。", "`Core/Inc/config.h`"],
+  ["板级", "168 MHz 时钟、GPIO、微秒延时、按键事件（短按／长按／先松开再按下）、LED 闪烁模式。", "`Core/Src/board.c`"],
+  ["比赛状态机", "赛段切换、里程门控、选段起跑、故障处理（第 7 章）。", "`App/mission_fsm.c`"],
+  ["运动控制", "循迹、定距直行（带航向纠偏）、原地定角转向（第 6 章）。", "`App/motion_ctrl.c`"],
+  ["电机", "电机协议收发、里程计、四轮速度环、反馈超时保护（第 3 章、第 6.1 节）。", "`Bsp/bsp_motor.c`"],
+  ["灰度", "8 路选通采样、标定；判线计算（二值化、线位置误差、偏置选线、分岔特征）在不碰硬件的纯函数里，回放可以直接测。", "`Bsp/bsp_gray.c`、`Bsp/gray_logic.c`"],
+  ["超声", "触发、回波捕获（中断）、卡高处理、过期判断；距离换算、中值和障碍确认在纯函数里，回放直接测。", "`Bsp/bsp_sonar.c`、`Bsp/sonar_logic.c`"],
+  ["视觉通信", "`$` 帧协议、任务切换与重发、结果锁存（第 4 章）。", "`Bsp/bsp_openmv.c`"],
+  ["显示屏", "ST7735S 彩屏驱动（SPI2，4 位调色板帧缓冲，按 8 行条带只发有变化的部分）和比赛页面；7 个调试页面只写帧缓冲，不读外设（第 5.4 节）。", "`Bsp/bsp_oled.c`、`App/ui_pages.c`"],
+  ["串口", "中断接收和环形缓冲、发送。", "`Bsp/bsp_uart.c`"],
+]));
+add(H2("5.3　调度"));
+add(P("建议采用 20 ms 固定控制周期加快速轮询的前后台结构："));
+add(CODE([
+  "while (1) {",
+  "  now = HAL_GetTick();",
+  "  system_poll_fast(now);      // 每圈：电机/视觉收帧、超声触发与取数、按键、LED",
+  "  if (now - last_ctrl >= 20) { // CFG_MAIN_CTRL_PERIOD_MS = 20 ms（50 Hz）",
+  "    Mission_Step20ms(now, dt); // 状态机内部调用灰度采样、循迹、定距/定角",
+  "    BspMotor_ControlStep(now, dt); // 四轮速度 PID → $pwm",
+  "    BspOled_FlushStep();          // 显示屏每周期最多发一条有变化的 8 行条带",
+  "  }",
+  "  if (now - last_oled >= 120) BspOled_ShowRaceScreen(...); // 只写帧缓冲",
+  "}",
+]));
+add(P("串口接收在中断里只写环形缓冲，解析放在主循环里做。超声回波宽度由定时器捕获，主循环只取结果，不阻塞（触发脉冲约 12 µs）；显示屏的 SPI 发送是阻塞操作。显示屏按 8 行一条带刷新，每条带 2560 字节，SPI 10.5 MHz 下约 2 ms；整屏 16 条带约 35 ms，所以比赛模式只能分条带发送，否则会挤占 20 ms 的控制周期。CCM RAM 不能用作 DMA 缓冲区。"));
+add(H2("5.4　显示屏页面"));
+add(P("上部小字显示赛段名（IDLE 时显示所选起跑段，如 `IDLE>FULL`；起跑条件不满足时显示 `WAIT:ENC`、`WAIT:SONAR` 或 `WAIT:MV`；故障时显示故障原因）、总里程、编码器和相机在线标志 E/M、超声距离 S（失效时显示 0）、锁存的方向（兜底猜测时显示小写 l/r）；下部用 3 倍字号彩色大字显示四色序列，例如 `R-G-B-Y`，每个字母用对应颜色，未识别的位置显示 `-`。四色区域**一旦写入就不再清空**：中途重启、故障停车和完成后都继续显示，直到断电。"));
+
+add(P("屏幕横放，画面 160×128。屏只能写、不能读，所以“在线”只表示初始化流程走完，屏有没有接好要看画面确认。方向、红蓝、反色、边缘偏移和 SPI 分频都在 `config.h` 的 `CFG_TFT_*` 里改（第 8 章）。"));
+add(P("7 个调试页面统一版式：顶部是 2 倍字的彩色标题栏，青色表示待机，绿色表示运行或在线，橙色表示标定，红色表示离线；中间主要数值用 2 倍字，次要数值用 1 倍字；底部灰字是按键提示。灰度页额外画了 8 路 ADC 柱状图，红线是每一路的阈值，方便现场看黑白分得开不开。"));
+
+add(H2("5.5　安全机制"));
+add(T([24, 76], [
+  ["机制", "做法"],
+  ["致命异常停车", "HardFault、MemManage、BusFault、UsageFault 和 `Error_Handler` 先调用 `BspMotor_PanicStop()`：不依赖 HAL 和中断，直接写 USART2 寄存器连发 3 次零 PWM，然后亮灯死等。"],
+  ["看门狗", "所有初始化完成后启动独立看门狗（寄存器直写，约 300 ms，`CFG_IWDG_RELOAD`），主循环每圈喂狗。卡死后复位，复位后 `BspMotor_Init` 立即发零 PWM。调试器暂停内核时看门狗冻结。"],
+  ["反馈超时", "运动中超过 `CFG_MOTOR_RX_TIMEOUT_MS` 没收到合格 `$MAll` → 急停，状态机报 ENC_TMO。"],
+  ["计数跳变", "相邻两帧任一轮累计计数变化超过 `CFG_ENC_JUMP_COUNTS`，视为驱动板复位：重建基线保持里程连续；运动中发生则急停并报 ENC_JUMP，不自行继续运动。"],
+  ["超声过期", "超过 `CFG_SONAR_STALE_MS` 没有收到完整回波即视为失效（模块没接、没供电或回波一直卡高）。从避障之前的赛段起跑时，超声失效不允许起跑；避障窗口内失效则急停并报 SONAR_LOST。"],
+  ["显示不阻塞", "页面函数只把内容写进帧缓冲。比赛模式每 20 ms 最多发送一条有变化的 8 行条带（约 2 ms）；调试模式每圈主循环最多发一条，整屏重画也不会让电机控制周期延后超过约 2 ms。只有初始化时整屏刷黑一次是阻塞的。"],
+  ["堵转／计数冻结", "某轮目标速度不低于 `CFG_STALL_MIN_TGT_MM_S`（60 mm/s），实测却低于 `CFG_STALL_MAX_SPD_MM_S`（10 mm/s），持续 `CFG_STALL_MS`（600 ms）→ 急停并报 ENC_STALL。覆盖“驱动板照常回帧但计数不变”（编码器插头松）和轮子被卡住。这一条是所有按里程判断的保护（丢线、回线、门控、找库兜底）的前提：计数冻结时那些保护都会失效。"],
+  ["动作超时", "每个定距／定角动作的时间上限 = 理论时间 × `CFG_MOTION_TIMEOUT_SCALE`（3）+ `CFG_MOTION_TIMEOUT_EXTRA_MS`（1000 ms），超时停车并报 MOTION_TMO。覆盖轮子能转但太慢、始终到不了目标的情况。"],
+]));
+add(NOTE("仍需硬件兜底", "以上都依赖 USART2 发送线完好。驱动板断串口会保持输出，所以仍要有可以随手切断的动力开关，并在架空时分别验证：正常停车、拔掉反馈线、拔掉发送线、按复位键四种情况。"));
+
+// ===== 6 =====
+add(H1("6　控制算法"));
+add(H2("6.1　四轮速度环"));
+add(P("建议由主控闭环：每 20 ms 用累计计数的差分算出各轮速度，然后按 `PWM = FF × 目标 + Kp·e + Ki·∫e + Kd·ė` 计算输出。非零输出小于起步死区时补到死区，再做限幅，最后一次性下发 `$pwm`。死区和限幅都要实测（初稿值为 350 和 2400）。"));
+add(P("理由：驱动板内部的轮径（67 mm）和线数参数与实车不符；而且日志中，架空闭环时四轮反馈差异很大，原因没有查清。主控闭环可以用自己标定的参数，也能直接看到每个轮子的误差。如果改用驱动板的 `$spd` 闭环，需要先把驱动板参数刷成实车配置，并重新做架空验证。"));
+add(H2("6.2　循迹"));
+add(CODE([
+  "bits[i] = (raw[i] 比 thresh[i] 更黑)            // 极性由 CFG_GRAY_BLACK_IS_LOW 决定",
+  "err     = Σ w[i]·bits[i] / Σ bits[i]            // w = −3.5 … +3.5，负值表示线在左",
+  "d       = d + α·(Δerr − d)                      // 每 20 ms 的误差变化先低通，α 初值 0.35；复位后首拍不算微分",
+  "diff    = Kp·err + Kd·d                         // 初稿值 80 / 100，限幅 ±450 mm/s，均待整定",
+  "base'   = base × max(1 − 0.12·|err|, 0.45)      // 偏差越大越减速（连续，不用台阶），保证过弯",
+  "左轮 = base' + diff，右轮 = base' − diff        // 线在左（err<0）时左轮慢、向左修正",
+]));
+add(BUL("**丢线**：全部 8 路都是白时，按最近一次有效误差的方向，以 `CFG_LINE_LOST_SPEED_SCALE`（初值 0.25）× base 低速前进、接近原地地转向寻线，差速另限在 `CFG_LINE_LOST_DIFF_MM_S`（初值 300 mm/s）以内：前进太快会画大弧转不回直角弯，差速太大会冲过头。连续丢线超过 `CFG_LINE_LOST_MAX_MM`（初值 150 mm）就停车，并以 LINE_LOST 原因进入故障。"));
+add(BUL("**弯道**：R30 圆角对 8 路灰度来说偏急。先在纯循迹调试模式下用 180 mm/s 整定 Kp/Kd，能稳定过弯后再逐步提高巡航速度。"));
+add(H2("6.3　分岔选支"));
+add(P("偏左／偏右寻线模式只跟踪最左侧或最右侧的连续黑线段，在菱形分岔区内车就会自然偏向对应支路。偏置只在“偏置起点 → 分岔结束”这个里程窗口内生效，出窗口后恢复居中寻线，在汇合点自然合流。同时看到两段分离的黑线是分岔区的特征，可以用来交叉确认确实进入了分岔区。"));
+add(P("**方向缺失**：到偏置起点时还没有锁存方向，先停车，原地等待 `CFG_FORK_WAIT_MS`（初值 1500 ms），期间发 `$CMD:QUERY#`。超时后才使用预设的兜底方向，并在日志中记 FORK_GUESS。不要沿用上一轮的方向：每次进入 TURN 任务时，主控和相机都要清空方向。"));
+add(NOTE("待整定", "回放显示：偏置刚生效时误差从 0 跳到 −3（或 +3），差速顶到限幅 260 mm/s，内侧轮目标约 −67 mm/s，也就是会短暂倒转、近似原地转。60° 分岔可能需要这么急，也可能把车甩出线。实车先低速试；太急就给分岔段单独设一个较小的差速限幅，或把偏置误差限制在 ±2 以内。"));
+add(H2("6.4　绕障"));
+add(P("超声中值连续 N 次不超过触发距离时停车，然后按四段折线绕行：转出 θ_out → 斜行 d_out → 回正 → 平行越过 d_par → 转入 θ_in → 斜行寻线。建议向赛道内侧绕行（在下直道上即向右），避免压出布边。绕行方向做成参数。"));
+add(T([30, 70], [
+  ["几何约束", "核算方法（W 为车宽，L 为车长，单位 mm）"],
+  ["侧移足够", "d_out × sin θ_out ≥ 50 + W/2 + 40（余量）。初稿取值 230 × sin 48° ≈ 171 mm，按 W = 200 mm 算需要 190 mm，**偏小，先量车宽再定**。"],
+  ["越过障碍", "d_par ≥ 100 + L + 2 × 40。初稿取值 260 mm 只够 L ≤ 80 mm，**明显不够**；同时触发距离也要计入，必须按实车尺寸重算。"],
+  ["不出避让区", "以障碍中心为原点，触发点到障碍的距离加上 d_out·cos θ_out、d_par、回切段的纵向投影，车头最远处不能超过 +500 mm；横向最大偏移加 W/2 不超过 500 mm。"],
+  ["非大转弯", "每次转角都小于 90°，转出和转入的角度大致对称，轨迹呈折线。"],
+  ["回线判据", "回切段连续 `CFG_REJOIN_CONFIRM`（初值 4 帧）检测到黑线且 |err| ≤ `CFG_REJOIN_MAX_ERR`（1.5），才算回到原线。走完 `CFG_AVOID_REJOIN_MAX_MM` 仍未确认，就急停并报 REJOIN_FAIL，由人工调整。"],
+]));
+add(H2("6.5　四色读取"));
+add(P("相机固定在车右前方，进入 COLOR_SCAN 即发 `$CMD:COLOR#`（FORK_PASS 末段先把相机切到 IDLE）。读色期间以 `CFG_SPEED_COLOR_MM_S` 低速循迹。收到 4 块就锁存；超出里程窗口仍不满 4 块时，保留已有结果，空位显示 `-`，然后继续去找库。"));
+add(H2("6.6　找库与倒车入库"));
+add(T([22, 78], [
+  ["步骤", "做法"],
+  ["里程重标定", "循迹时累计航向变化，单次变化超过 70° 就判定经过一个弯，弯数加 1。经过第 4 弯后把 `park_ref_mm` 清零，之后的找库距离都从这里算起，避免整圈累计的里程误差（3% 时约 40 cm）。"],
+  ["P 牌主判据", "PARK 任务下，最新一帧是 flag=1 且距今不超过 `CFG_PARK_FRESH_MS`（150 ms），area 不小于阈值，且 cx 在对齐窗口内，就停车，然后进入倒车流程。阈值和对齐窗口都按实测标定。"],
+  ["里程兜底", "离第 4 弯的距离超过 `CFG_PARK_FALLBACK_MM`（初值按实测的“弯→库中心”距离设定，约 2.2 m）仍没有触发，就按里程触发，并记 PARK_BY_ODOM。"],
+  ["入库动作", "继续前进一段距离，使车体中心对准库中线 → 原地转 90°，使车尾朝向库口 → 低速倒车到标定深度 → 停车保持 5.5 s → DONE。前进距离、转向方向和倒车深度都是参数。"],
+  ["余量核算", "库是 40 × 40 cm，车长 L 和车宽 W 都接近这个尺寸，所以先量出实车尺寸：倒车深度 = 库口内沿到车尾目标位置的距离，要使车头也越过库口线；左右余量为 (400 − W)/2。余量不足 3 cm 时，入库分很难保证，需要优先压缩车身或调整相机的安装位置。"],
+]));
+
+// ===== 7 =====
+add(H1("7　比赛状态机与中途重启"));
+add(H2("7.1　赛段转换"));
+add(T([17, 35, 48], [
+  ["状态", "进入时动作", "转出条件／异常"],
+  ["IDLE", "停车，相机 IDLE，LED 慢闪，等待按键先松开。", "短按起跑，长按切换起跑段。要求编码器在线、相机在线；从避障之前起跑时还要求超声正常，否则显示屏显示 WAIT 原因。全程起跑时发 `$CMD:RESET#`。"],
+  ["TRACK_TO_OBS", "相机 IDLE，复位超声触发计数。", "总里程 ≥ `CFG_GATE_OBS_ENABLE_MM` 且超声确认有障碍 → AVOID_OBS。持续丢线 → FAULT。"],
+  ["AVOID_OBS", "进入四段绕行子状态。", "回线确认 → FORK_PASS。寻线距离超过 `CFG_AVOID_REJOIN_MAX_MM` 仍未找到线 → 停车并进入 FAULT（REJOIN_FAIL），由人工调整。"],
+  ["FORK_PASS", "相机 TURN（立即下发）。", "锁存方向后在窗口内偏置寻线，出窗口后相机 IDLE；里程到达后 → COLOR_SCAN。方向缺失按第 6.3 节处理。"],
+  ["COLOR_SCAN", "相机 COLOR。", "锁存 4 色，或里程超出窗口 → PARK_SEARCH。"],
+  ["PARK_SEARCH", "相机 PARK。", "P 牌对齐，或里程兜底 → PARK_REVERSE。"],
+  ["PARK_REVERSE", "相机 IDLE，执行四个子步骤。", "保持 5.5 s → DONE。"],
+  ["DONE", "停车，LED 双闪，显示屏保持四色。", "等待断电。"],
+  ["FAULT", "零 PWM 急停，LED 急闪，显示屏显示故障原因。", "松开后再长按 → 回到 IDLE（保留方向和四色结果）。"],
+]));
+add(H2("7.2　中途重启（需要新增）"));
+add(P("细则允许最多三次人工调整，可以重做某一项或跳过某一项。程序已实现运行时选段（`App/mission_fsm.c`，比赛模式下有效）："));
+add(NUM("在 IDLE 状态下**长按**，起跑赛段在“全程 → 避障前 → 分岔前 → 色区前 → 找库”之间循环，显示屏大字显示当前选择。", "numB"));
+add(NUM("**短按**从所选赛段起跑。中途起跑时把 `total_dist_mm` 预置为该赛段在第 1.3 节表中的起点里程，让后续门控继续有效。", "numB"));
+add(NUM("“全程”起跑发 `$CMD:RESET#` 并清空全部结果；“色区前”起跑表示重做四色，也会清空；其余赛段起跑时**保留已锁存的方向和四色**，显示屏继续显示。", "numB"));
+add(NUM("运行中短按 = 急停，进入 FAULT（KEY_STOP）。由人工把车放到调整位置，长按回到 IDLE 后再选段。", "numB"));
+add(NOTE("注意", "每次调整都扣 5 分并计入用时。现场优先“跳过不稳定的项”，不要反复重试同一项。"));
+add(H2("7.3　故障与日志"));
+add(P("故障原因：ENC_TMO（编码器反馈超时，初稿值 300 ms，按实测的最大帧间隔确定）、ENC_JUMP（计数跳变）、ENC_STALL（堵转或计数冻结）、MOTION_TMO（动作超时）、KEY_STOP、LINE_LOST（丢线超过 `CFG_LINE_LOST_MAX_MM` 或找线转过 `CFG_LINE_LOST_MAX_DEG`）、REJOIN_FAIL、SONAR_LOST。相机离线不作为故障：分岔有等待超时、找库有里程兜底，显示屏上的 M 标志变成 x 作为提示。进入故障时记下赛段、四轮计数、最后一次有效的灰度和超声值。打开调试串口开关后，USART6 每 100 ms 输出一行 CSV："));
+add(CODE(["t_ms,state,dist,left_tgt,right_tgt,enc1,enc2,enc3,enc4,gray_bits,err,tof_mm,mv_task,turn,colors,pan_us,tilt_us,fault"]));
+add(P("调试串口只输出，不接收任何命令，以满足禁止遥控的规定。"));
+
+// ===== 8 =====
+add(H1("8　参数总表"));
+add(P("参数名沿用初稿 `Core/Inc/config.h` 的命名。“初稿值”只是照资料估算出来的起点，**没有一项经过实车验证**。状态一栏：**估值**表示可以先用来试车，但必须实测后回填；**待测**表示缺少依据，或者与实测记录矛盾，不能直接使用。"));
+add(T([32, 16, 12, 40], [
+  ["参数", "初稿值", "状态", "标定方法／备注"],
+  ["`CFG_ENC_SIGN_M1~M4`", "全部 −1", "待测", "旧档前进时四轮计数都为负；切到 310 档后 M2、M4 停机净计数为 +48、+50，**两组结果矛盾**。用 `RUN_MODE_DBG_MOTOR_ENC` 逐轮架空确认。"],
+  ["`CFG_WHEEL_DIAMETER_MM`", "48.0", "待测", "驱动板内部参数为 67.000，两者不一致。用卡尺量轮胎外径，再用 1 m 直线修正为“有效轮径”。"],
+  ["`CFG_ENC_COUNTS_PER_REV`", "928", "估值", "只有 M2 一次手转的读数。四轮各转 10 圈后取平均。"],
+  ["`CFG_TRACK_WIDTH_MM`", "175", "估值", "用 `RUN_MODE_DBG_MOTION_CAL` 原地转 360°，按实际转角反算等效轮距。"],
+  ["`CFG_WHEEL_PID_*` / `FF` / 死区", "2.2/0.35/0.05，3.2，350", "估值", "架空阶跃到 200 mm/s，看超调和稳态误差；落地后复核。"],
+  ["`CFG_GRAY_BLACK_IS_LOW` / 顺序 / 阈值", "1 / 0 / 1800", "待测", "`RUN_MODE_DBG_GRAY` 一键标定，在现场地布上重做。"],
+  ["`CFG_LINE_PID_KP/KD`", "80 / 100", "估值", "第 6.2 节。"],
+  ["`CFG_LINE_D_LPF_ALPHA`", "0.35", "估值", "第 6.2 节，微分低通；1 为不滤波。"],
+  ["`CFG_LINE_DIFF_MAX_MM_S`", "450", "估值", "第 6.2 节，差速限幅；内侧轮可以反转。"],
+  ["`CFG_WHEEL_BRAKE_PWM`", "200", "估值", "目标为正而轮子被拖快时允许的反向制动 PWM 上限；0 为只能滑行。"],
+  ["各赛段速度", "130～280 mm/s", "估值", "先求稳定，再逐段提速。"],
+  ["`CFG_OBS_TRIG_DIST_MM`", "240", "估值", "`RUN_MODE_DBG_SONAR` 用 10 cm 方块测有效距离；触发点要在避让区之内（≤ 500 mm）。超声 60 ms 一次，确认次数取 2，从进入触发距离到停车约多走 50 mm。"],
+  ["`CFG_AVOID_*`", "48°/230/260/45°/380", "估值", "按第 6.4 节公式和实车尺寸重算，再在地面贴出 1 m × 1 m 避让区实测。"],
+  ["`CFG_SONAR_MM_PER_US` / `CFG_SONAR_MAX_MM`", "0.1715 / 1500", "估值", "声速按 20 °C；现场温差大时按 0.1657 + 0.0003 × 温度改。超过量程上限记为空旷。"],
+  ["`CFG_GATE_*`", "3200/350/1700/1200/2400/1100", "估值", "低速跑整圈，按第 1.3 节的特征点回填。"],
+  ["`CFG_FORK_FALLBACK_DIR`", "'R'", "—", "只在方向缺失并等待超时后才使用。"],
+  ["`CFG_PARK_*`", "160 px / −25～35 / 240 / 90° / 360 / 5500 ms", "估值", "第 6.6 节，按 P 牌和库口的实际偏移标定。"],
+  ["`CFG_LINE_LOST_MAX_MM` / 速度系数", "150 mm / 0.6", "估值", "在弯道上人为让车丢线，看找回距离。"],
+  ["`CFG_FORK_WAIT_MS`", "1500", "估值", "按相机从停稳到确认方向的实测时间加余量。"],
+  ["`CFG_REJOIN_CONFIRM` / `MAX_ERR`", "4 帧 / 1.5", "估值", "绕障实测。"],
+  ["`CFG_CORNER_WINDOW_MM` / `YAW_DEG`", "400 / 60°", "估值", "低速跑整圈，确认四个弯都被识别、直道上不误判。"],
+  ["`CFG_CORNER4_MIN_AFTER_COLOR_MM`", "1500", "估值", "必须大于“进入色区 → 第 3 弯”的距离，小于“进入色区 → 第 4 弯”的距离。"],
+  ["`CFG_PARK_FALLBACK_MM` / `_ABS_MM`", "2200 / 5100", "估值", "实测“第 4 弯 → 库中心对齐点”的距离。"],
+  ["`CFG_STAGE_*_START_MM`", "3200/5500/8400/11500", "估值", "中途起跑预置的总里程，按整圈实测的特征点回填。"],
+  ["`CFG_LINE_LOST_MAX_DEG`", "180", "估值", "丢线找线近原地转时按转角判 LINE_LOST；直角弯约需 90°。"],
+  ["`CFG_STALL_*`", "60 mm/s / 10 mm/s / 600 ms", "估值", "从静止起步到轮速超过 10 mm/s 的实测时间要远小于 600 ms；架空拔编码器插头验证能触发。"],
+  ["`CFG_MOTION_TIMEOUT_*`", "×3 + 1000 ms", "估值", "正常动作不能误触发；实测最慢的转向和倒车后再定。"],
+  ["`CFG_PARK_FRESH_MS`", "150", "估值", "要大于相机两帧的间隔；相机帧率低于 15 时加大。"],
+  ["`CFG_SONAR_STALE_MS` / `CFG_ENC_JUMP_COUNTS`", "300 / 4000", "估值", "4000 要比 20 ms 内最大的正常计数变化大好几倍。"],
+  ["`CFG_IWDG_RELOAD` / `CFG_TFT_SPI_DIV`", "300 / 4", "估值", "显示屏花屏时把分频改为 8。"],
+  ["`CFG_TFT_MADCTL` / `_BGR` / `_INVERT` / `_X_OFFSET`", "0x60 / 1 / 0 / 0", "估值", "上电看画面：上下颠倒在 0x60 和 0xA0 之间换；红蓝反了改 BGR；底色发白改 INVERT；边缘花点调偏移。"],
+]));
+add(H2("8.1　现场参数组"));
+add(P("现场调试只有 5 分钟，来不及重新编译烧录。建议把速度和灰度阈值做成 2～3 组预设（例如稳妥、标准、快速），开机时按住按键上电进入选组页面，短按切换，长按确认，显示屏显示当前组号。"));
+
+// ===== 9 =====
+add(H1("9　开发顺序与验收"));
+add(H2("9.1　分步调试模式"));
+add(P("固件需要提供以下分步调试模式，用一个编译开关切换。初稿 `main.c` 已经有同名框架，但没有验证过，要按下表的通过标准逐个验收。"));
+add(T([28, 72], [
+  ["模式", "用途与通过标准"],
+  ["`DBG_MOTOR_ENC`", "架空，短按依次单独驱动 M1→M4→全轮 1.5 s。通过标准：每个轮子物理前进时，`fwd_enc` 递增。"],
+  ["`DBG_MOTION_CAL`", "地面直行 1000 mm、原地转 90°。通过标准：卷尺误差 ≤ 1%，转角误差 ≤ 3°。"],
+  ["`DBG_GRAY`", "看 8 路原始值并一键标定。通过标准：在现场地布上黑白分得开，左右顺序正确。"],
+  ["`DBG_SONAR`", "测距与障碍触发，页面显示回波宽度和漏回波次数。通过标准：10 cm 方块在触发距离处稳定触发；没有障碍、以及小车在赛道上行驶（地面、两侧物体）时不误触发。"],
+  ["`DBG_OPENMV`", "协议联调，见第 4.4 节。"],
+  ["`DBG_LINE_ONLY`", "纯循迹，长按切换居中、左偏、右偏。通过标准：独立连续通过两弯；偏置时能选中对应支路。"],
+  ["`DBG_AVOID_ONLY`", "单项避障。通过标准：不碰障碍、不出避让区、回到原线后继续循迹。"],
+  ["`DBG_PARK_ONLY`", "单项找库入库。通过标准：车尾先入、投影全部在库内、停稳 5 s。"],
+]));
+add(H2("9.2　实车验证顺序"));
+add(T([18, 44, 38], [
+  ["顺序", "现场怎么测", "何时进入下一步"],
+  ["1　接线与供电", "灰度按 5 V 供电，先断开 OUT，逐路量最高电压。超声模块接 5 V，Echo 接 PB7；显示屏核对型号和供电。", "OUT ≤ 3.3 V（或已做电平转换）；超声调试页显示 ECHO OK。"],
+  ["2　底盘标定", "`DBG_MOTOR_ENC` → `DBG_MOTION_CAL`，回填方向、轮径、每圈计数、等效轮距。", "直行和转角误差达到第 9.1 节的标准。"],
+  ["3　循迹两弯", "`DBG_GRAY` 标定后用 `DBG_LINE_ONLY` 跑前两弯，再跑整圈记录特征点里程。", "能独立连续通过两弯，并已回填门控参数。"],
+  ["4　绕障回线", "贴出避让区，用 `DBG_AVOID_ONLY` 测试。", "无碰撞、不出区、回到原线。"],
+  ["5　分岔与四色", "两种箭头各走一次；四色测试包括相邻同色。", "两种箭头都驶入对应支路；显示屏四个位置都正确并保持。"],
+  ["6　入库与整圈", "`DBG_PARK_ONLY` → `RACE` 一键整圈。", "入库并停稳 5 s；记录整圈用时、得分和人工调整次数。"],
+]));
+add(H2("9.3　赛前说明（四色测量方法）"));
+add(P("可以直接照读：“小车用 OpenMV 相机侧视色块，在 LAB 颜色空间按红、绿、蓝、黄四组阈值找色块，找不到时再用色相投票补充；连续几帧颜色一致才记为一块，两块之间必须看到空档才计下一块。识别结果经串口交给主控，按行驶方向依次显示在车上的显示屏，跑完后一直保持显示。”"));
+add(H2("9.4　代码缺口清单"));
+add(P("“代码已完成”只表示已按本册写好并编译通过，**都没有经过实车验证**，要按第 9.1、9.2 节逐项验收。"));
+add(T([6, 50, 18, 13, 13], [
+  ["#", "事项", "位置", "负责人", "状态"],
+  ["0", "按本册逐模块审查初稿，修安全问题，编译全部运行模式", "stm32f407vet6/", "", "代码已完成"],
+  ["1", "OpenMV 改为 `$` 协议，新增心跳和 P 牌识别，无屏启动", "openmv4h7plus/MAIN/main.py", "", "协议已联测；P 牌待实物调"],
+  ["2", "找库里程兜底，经过第 4 弯后重标定里程", "mission_fsm.c", "", "代码已完成"],
+  ["3", "运行时选段起跑；中途起跑保留已锁存结果", "mission_fsm.c / main.c", "", "代码已完成"],
+  ["4", "分岔方向缺失时停车等待", "mission_fsm.c", "", "代码已完成"],
+  ["5", "回线连续确认；按实车尺寸重算绕障几何", "mission_fsm.c / config.h", "", "确认已完成；几何待量车"],
+  ["6", "循迹丢线保护；偏差越大越减速", "motion_ctrl.c", "", "代码已完成"],
+  ["7", "起跑前检查相机、超声是否在线（灰度没有在线信号，靠标定检查）", "mission_fsm.c", "", "代码已完成"],
+  ["8", "调试串口 CSV 日志", "main.c / bsp_uart.c", "", "未开始"],
+  ["9", "现场参数组选择", "config.h / main.c", "", "未开始"],
+  ["10", "实测并回填第 8 章所有“估值”和“待测”参数", "config.h", "", "未开始"],
+  ["11", "更新 AGENTS.md：固件现状、OpenMV 比赛脚本的路径", "AGENTS.md", "", "已完成"],
+  ["12", "灰度标定结果写入 Flash（现在断电即丢，需手动回填 config.h）", "bsp_gray.c", "", "未开始"],
+  ["13", "状态机电脑回放：相机重启、残帧、分岔旧方向、P 牌最新帧、计数冻结、动作超时、正常入库", "test/sim/", "", "已完成，54 项通过"],
+]));
+
+// ===== 10 =====
+add(H2("9.5　电脑回放与测试覆盖"));
+add(P("不接硬件就能跑的测试有三套："));
+add(T([30, 70], [
+  ["测试", "内容与运行方法"],
+  ["相机脚本测试", "`python -I openmv4h7plus/test/test_main_pc.py`，39 项。测相机脚本的拆帧、任务切换、结果确认与重发、四色计数（含相邻同色、切走再切回不重复计数）、四色续接（采用、领先、矛盾、非法序列、重复命令）、P 牌连续帧确认、心跳。"],
+  ["屏幕页面预览", "在 `stm32f407vet6/` 下执行 `.\\test\\ui\\run_ui.ps1`。用主机 gcc 编译真实的显示驱动和页面代码，SPI 字节流交给一个简化的 ST7735 模拟器，输出比赛页和 7 个调试页的拼图 `test/ui/out/pages.png`。同时检查：初始化发出 RGB565 和 `CFG_TFT_MADCTL`；每次 `FlushStep` 最多发一条带；内容不变时不再发送；只改一个数字时只重发受影响的条带；没有写到窗口之外的像素。"],
+  ["主控状态机回放", "在 `stm32f407vet6/` 下执行 `.\\test\\sim\\run_sim.ps1`，54 项。用主机 gcc 编译真实的状态机、运动控制、电机和视觉驱动；电机板、相机、按键、灰度、超声换成模拟件（超声读数处理用真实的 `sonar_logic.c`），按 1 ms 推进时钟，每 20 ms 跑一个控制周期，与 `main.c` 的顺序一致。用例：相机重启后恢复任务；四色残帧、数量不符、前缀不符；入库定距和循迹中计数冻结；轮子太慢导致动作超时；分岔重跑不沿用旧方向；P 牌对齐后同周期丢失；正常入库到 DONE；24 条畸形帧（各帧类型）全部丢弃且状态不变；相机在色区中途重启后，由模拟相机自己续接数出完整四色；同一双线图样下锁 L、锁 R，经真实的灰度计算和循迹控制，左右轮速差方向相反；灰度装反、黑白极性相反的四种配置组合下方向都正确；超声中值滤波、漏回波、失效急停和不许起跑；视觉任务立即下发；丢线找线按转角停车。"],
+]));
+add(P("为确认回放真能抓住缺陷，用 `python -I stm32f407vet6/test/sim/mutate.py` 做变异检查：把 15 处修复逐一撤回或故意写反（如 P 牌接受任意非零 flag、灰度忽略装反、循迹差速符号写反），每一处都会让对应用例失败。相机侧的四色续接也做了同样的检查。"));
+add(NOTE("覆盖不到的", "两套测试都不涉及真实硬件：灰度、超声驱动层是脚本给定的理想值，电机板是一阶模型，相机识别本身（颜色阈值、P 牌判据）没有被测试。实车标定和第 9.1、9.2 节的逐项验收仍然必须做。另外，四色续接只能保证“不重复计数”：如果相机恰好在下一块已进入画面时重启，这一块可能漏掉（漏掉好过记错，记错会让后面每一位都错位）。"));
+
+add(H1("10　资料定位"));
+add(T([34, 66], [
+  ["要查什么", "到哪里看"],
+  ["比赛目标与计分", "`old/第十四届“星火杯”赛题二细则.pdf` 第 3～5 节。"],
+  ["接线与供电", "`old/星火杯小车装车接线总表.pdf` 第 1～2 页；`stm32f407vet6/Core/Inc/board.h`。"],
+  ["比赛固件", "`stm32f407vet6/`：已按本册审查修改，未经实车验证；参数在 `Core/Inc/config.h`。"],
+  ["电机协议", "`old/四路电机驱动板串口通信协议_商家答复更新版.docx`。"],
+  ["底盘调试历史", "`old/car_debug_log.md`；附录 A。"],
+  ["底盘测试档复现", "`old/_20261121/motor_test_20261119/app/main.c`（标准库，ARM Compiler 5.06）。《先读我.md》只在 `old/星火杯小车调试程序交接包_20261121.zip` 里，解压出来的目录中没有。"],
+  ["视觉脚本", "比赛版 `openmv4h7plus/MAIN/main.py`（第 4.4 节）；调参用调试版 `openmv4h7plus/openmv_debug/main.py`（旧单字母协议）。"],
+  ["云台（已取消）", "`openmv4h7plus/gimbal_debug/云台调试报告.md`；附录 B。旧驱动归档在 `old/tof_gimbal_removed_20261123/`。"],
+  ["离线素材", "`old/赛道视觉素材/`，`labels.csv` 共 220 条，覆盖 24 种四色排列和左右箭头，**不含相邻同色和运动中的反光**。"],
+  ["现场照片", "`old/赛题二实地图/`。"],
+  ["项目说明（给 AI 助手）", "根目录 `AGENTS.md`。"],
+]));
+add(NOTE("资料取舍", "旧版采购清单、旧版协议、厂商例程和 IDE 只用来查型号和接口。压缩副本、渲染中间文件和无关的实验报告不算实车证据。"));
+
+// ===== 附录 A =====
+add(H1("附录 A　底盘调试记录"));
+add(P("已经测通的部分：逐轮手拨确认了 M1 左前、M2 左后、M3 右前、M4 右后；电脑能收到四路累计计数；早期按键版已验证冷启动静止、长按只触发一轮、架空四轮向前约 3 秒后停车。"));
+add(T([20, 46, 34], [
+  ["测试条件", "观测与判断", "对比赛固件的影响"],
+  ["同一速度目标，架空闭环", "曾触发“计数增量过大”保护。一次 102 ms 内四路增量为 −695、−689、−111、−274，左侧持续偏大。仅凭回传数据，无法判断是机械轮速差异还是 PID 问题。", "必须先完成逐轮的每圈计数和轮径标定，再整定主控速度 PID。"],
+  ["切换到 310 电机档后", "板卡回读 Motor_type = 2。四轮目视向前，M2 却先触发方向保护；停机时相对起点为 0、+48、0、+50。旧档的一次前进测试中四轮都为负。", "`CFG_ENC_SIGN_*` 不能直接沿用全部为 −1 的设置，必须逐轮实测。"],
+  ["负载测试提高 PWM", "早期负载版反馈“能跑、偏慢”。最新交接档是 1250/1250/1250/2000：M4 一直按 5:8 的比例给得更高，**原因没有记录**，这组值也没有烧录或实跑记录。", "比赛固件使用闭环控制，不沿用这组比例。M4 的阻力是否偏大，在闭环中用 `CFG_WHEEL_FF_SCALE_M4` 观察。"],
+]));
+add(P("容易混用的数据：实板回读固件 1.7.3、线数 11、减速比参数 30、轮径参数 67.000。M2 手转一次读到 928 计数，但不能确定当时是否刚好转了一整圈。商家举例的 1040 计数／圈对应 13 线、减速比 20 的另一套配置。"));
+add(P("停车可靠性：商家确认，驱动板断开串口后会维持上一次的输出。日志记录部分杜邦母口偏松。线束要固定好，并分别验证正常停车、反馈中断，以及能够独立切断动力，然后再落地测试。"));
+
+// ===== 附录 B =====
+add(H1("附录 B　视觉与云台调试记录"));
+add(...IMG2(["image1.jpg", "image2.jpg"], ["侧方色块与地布反光", "P 牌在库口旁，库线开口朝主线"]));
+add(P("**颜色**：11 月 19 日的历史反馈先是只能识别三色，随后出现画面正常、但一直显示 NOW=NONE 的情况，最后一次调整后的效果没有确认。复测方法：在同一距离逐个放入四种实物，保存漏识颜色时的原图、框内 LAB 读数和曝光条件；四种颜色静态都稳定后，再沿赛道手推，测试漏记、重复记和相邻同色。"));
+add(P("**云台**：旧台架由 OpenMV 控制舵机。水平轴从中位发 60° 指令，实物单侧转动约 90°；±90° 指令下，从左端经中位到右端总共约 240°。俯仰正位指令为 −5°，受碰撞后向后约 80°。现在改由主控 PB8/PB9 控制，台架上测得的角度不能直接当作比赛姿态，装车后要重新标定四个姿态。"));
+add(P("**视角**：路牌在右前方，色块和 P 牌在右侧。按装车高度手推录像，测出从首次看清目标到必须转向、读色或减速的距离，据此设置门控和车速。"));
+
+// ---------- 文档 ----------
+const doc = new Document({
+  creator: "starfire_2",
+  title: "星火杯赛题二比赛程序开发交接文档",
+  styles: {
+    default: { document: { run: { font: FONT, size: 20, color: "222222" } } },
+    paragraphStyles: [
+      { id: "Title", name: "Title", basedOn: "Normal", run: { font: FONT, size: 40, bold: true, color: C_TITLE }, paragraph: { spacing: { before: 0, after: 80 }, keepNext: true } },
+      { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: FONT, size: 28, bold: true, color: C_H1 }, paragraph: { spacing: { before: 320, after: 140 }, keepNext: true, outlineLevel: 0, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "348DA5", space: 4 } } } },
+      { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { font: FONT, size: 23, bold: true, color: C_H2 }, paragraph: { spacing: { before: 220, after: 100 }, keepNext: true, outlineLevel: 1 } },
+    ],
+  },
+  numbering: {
+    config: [
+      { reference: "bul", levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 420, hanging: 260 } } } }] },
+      ...["num", "numA", "numB"].map((r) => ({ reference: r, levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 420, hanging: 300 } } } }] })),
+    ],
+  },
+  features: { updateFields: true },
+  sections: [{
+    properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 935, right: 1219, bottom: 850, left: 1219 } } },
+    footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [
+      new TextRun({ text: "赛题二比赛程序开发交接 · 第 3 版　", font: FONT, size: 16, color: C_NOTE }),
+      new TextRun({ children: [PageNumber.CURRENT], font: FONT, size: 16, color: C_NOTE }),
+    ] })] }) },
+    children: body,
+  }],
+});
+
+Packer.toBuffer(doc).then((buf) => { fs.writeFileSync(OUT, buf); console.log("written", OUT, buf.length); });
