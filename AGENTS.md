@@ -4,7 +4,7 @@
 
 ## 项目概况
 
-第十四届“星火杯”赛题二的智能小车（基于光电导航的智能移动测量小车）。这个目录不是 git 仓库。系统由三块板组成：
+第十四届“星火杯”赛题二的智能小车（基于光电导航的智能移动测量小车）。本目录是 git 仓库，远程为 GitHub `1009delight-alt/starfire_2`，分支 `main`。根目录 `.gitignore` 是白名单，只收 `stm32f407vet6/`、`openmv4h7plus/`（不含 `openmvide/`）、主文档、`tmp/build_handover_doc_v2.js` 和本文件；`old/`、`raspbot/` 和天空星 `.epro` 不入库。新增要入库的根目录文件或目录时，先在 `.gitignore` 里放行。系统由三块板组成：
 
 - **STM32F407VET6（立创天空星）**：主控，工程在 `stm32f407vet6/`。
 - **OpenMV4 H7 Plus**：视觉，比赛脚本在 `openmv4h7plus/MAIN/main.py`。
