@@ -3,8 +3,7 @@
 #include "bsp_uart.h"
 #include "bsp_motor.h"
 #include "bsp_gray.h"
-#include "bsp_tof.h"
-#include "bsp_gimbal.h"
+#include "bsp_sonar.h"
 #include "bsp_openmv.h"
 #include "bsp_oled.h"
 #include "motion_ctrl.h"
@@ -21,8 +20,7 @@
  *    RUN_MODE_DBG_MOTOR_ENC   : 架空电机与编码器方向/单圈计数标定
  *    RUN_MODE_DBG_MOTION_CAL  : 地面 1000mm 直线 & 原地 90° 转向标定
  *    RUN_MODE_DBG_GRAY        : 8 路灰度原始 ADC / 二值化 / 一键阈值校准
- *    RUN_MODE_DBG_TOF         : 前向激光 VL53L0X 测距与避障触发测试
- *    RUN_MODE_DBG_GIMBAL      : 双轴云台按 KEY 依次切换 4 个预设姿态
+ *    RUN_MODE_DBG_SONAR       : 前向超声 HC-SR04 测距与避障触发测试
  *    RUN_MODE_DBG_OPENMV      : OpenMV 协议联调（按 KEY 轮切 IDLE/TURN/COLOR/PARK）
  *    RUN_MODE_DBG_LINE_ONLY   : 纯循迹 PID 调试（按 KEY 启停，长按切中/左/右偏置）
  *    RUN_MODE_DBG_AVOID_ONLY  : 单项避障绕行与回线测试
@@ -32,14 +30,13 @@
 #define RUN_MODE_DBG_MOTOR_ENC      1U
 #define RUN_MODE_DBG_MOTION_CAL     2U
 #define RUN_MODE_DBG_GRAY           3U
-#define RUN_MODE_DBG_TOF            4U
-#define RUN_MODE_DBG_GIMBAL         5U
-#define RUN_MODE_DBG_OPENMV         6U
-#define RUN_MODE_DBG_LINE_ONLY      7U
-#define RUN_MODE_DBG_AVOID_ONLY     8U
-#define RUN_MODE_DBG_PARK_ONLY      9U
+#define RUN_MODE_DBG_SONAR          4U
+#define RUN_MODE_DBG_OPENMV         5U
+#define RUN_MODE_DBG_LINE_ONLY      6U
+#define RUN_MODE_DBG_AVOID_ONLY     7U
+#define RUN_MODE_DBG_PARK_ONLY      8U
 
-#define APP_RUN_MODE               RUN_MODE_DBG_LINE_ONLY
+#define APP_RUN_MODE               RUN_MODE_DBG_SONAR
 /* 调试辅助变量（Keil / VS Code Watch 窗口可直接观测） */
 volatile uint32_t g_main_loop_ticks = 0U;
 
@@ -47,14 +44,14 @@ static void system_bsp_init(void)
 {
     Board_Init();
 
-#if (CFG_ENABLE_DEBUG_UART != 0U)
+#if (CFG_ENABLE_DEBUG_UART != 0U) || (APP_RUN_MODE == RUN_MODE_DBG_LINE_ONLY)
+    /* 纯循迹模式固定输出 USART6 日志，不受总开关影响（原来总开关为 0 时日志发不出去） */
     BspUart_Init(BSP_UART_DEBUG, 115200U);
 #endif
     BspMotor_Init();
     BspOled_Init();
     BspGray_Init();
-    (void)BspTof_Init();
-    BspGimbal_Init();
+    (void)BspSonar_Init();
     BspOpenmv_Init();
     Motion_Init();
 
@@ -71,7 +68,7 @@ static void system_poll_fast(uint32_t now_ms)
 #endif
     BspMotor_PollRx(now_ms);
     BspOpenmv_Poll(now_ms);
-    BspTof_Update(now_ms);
+    BspSonar_Update(now_ms);
     Board_KeyUpdate(now_ms);
     Board_LedUpdate(now_ms);
 }
@@ -232,9 +229,9 @@ static void run_dbg_gray(void)
 }
 #endif
 
-#if (APP_RUN_MODE == RUN_MODE_DBG_TOF)
-/* 前向激光 VL53L0X 测距调试 */
-static void run_dbg_tof(void)
+#if (APP_RUN_MODE == RUN_MODE_DBG_SONAR)
+/* 前向超声 HC-SR04 测距调试 */
+static void run_dbg_sonar(void)
 {
     uint32_t last_ctrl = 0U, last_oled = 0U;
     Board_LedSetPattern(LED_PAT_SLOW_BLINK);
@@ -251,53 +248,19 @@ static void run_dbg_tof(void)
 
         if ((uint32_t)(now - last_oled) >= CFG_OLED_REFRESH_PERIOD_MS) {
             last_oled = now;
-            UiPage_Tof(BspTof_GetState(), BspTof_IsObstacleDetected(now));
-        }
-    }
-}
-#endif
-
-#if (APP_RUN_MODE == RUN_MODE_DBG_GIMBAL)
-/* 双轴云台调试：短按 KEY 依次在 CENTER -> SIGN -> COLOR -> PARK 间平滑切换 */
-static void run_dbg_gimbal(void)
-{
-    gimbal_pose_t pose = GIMBAL_POSE_CENTER;
-    uint32_t last_ctrl = 0U, last_oled = 0U;
-    BspGimbal_SetPose(pose);
-    Board_LedSetPattern(LED_PAT_SLOW_BLINK);
-
-    while (1) {
-        uint32_t now = HAL_GetTick();
-        system_poll_fast(now);
-        (void)BspOled_FlushStep();   /* 每圈最多发一条 8 行条带（约 2 ms），不挤占控制周期 */
-
-        if (Board_KeyTakeEvent() == KEY_EVT_SHORT) {
-            pose = (gimbal_pose_t)(((uint8_t)pose + 1U) % (uint8_t)GIMBAL_POSE_COUNT);
-            BspGimbal_SetPose(pose);
-        }
-
-        if ((uint32_t)(now - last_ctrl) >= CFG_MAIN_CTRL_PERIOD_MS) {
-            last_ctrl = now;
-            BspGimbal_Update20ms();
-            BspMotor_ControlStep(now, 0.02f);
-        }
-
-        if ((uint32_t)(now - last_oled) >= CFG_OLED_REFRESH_PERIOD_MS) {
-            last_oled = now;
-            UiPage_Gimbal(BspGimbal_PoseName(pose), BspGimbal_GetPanUs(), BspGimbal_GetTiltUs());
+            UiPage_Sonar(BspSonar_GetState(), BspSonar_IsHealthy(now), BspSonar_IsObstacleDetected(now));
         }
     }
 }
 #endif
 
 #if (APP_RUN_MODE == RUN_MODE_DBG_OPENMV)
-/* OpenMV 联调：短按 KEY 轮切 IDLE -> TURN -> COLOR -> PARK（联动云台姿态），长按复位 */
+/* OpenMV 联调：短按 KEY 轮切 IDLE -> TURN -> COLOR -> PARK，长按复位 */
 static void run_dbg_openmv(void)
 {
     openmv_task_t task = OPENMV_TASK_TURN;
     uint32_t last_ctrl = 0U, last_oled = 0U;
     BspOpenmv_SetTask(task);
-    BspGimbal_SetPose(GIMBAL_POSE_SIGN);
     Board_LedSetPattern(LED_PAT_SLOW_BLINK);
 
     while (1) {
@@ -309,19 +272,13 @@ static void run_dbg_openmv(void)
         if (ev == KEY_EVT_LONG) {
             BspOpenmv_ResetAll();
             task = OPENMV_TASK_IDLE;
-            BspGimbal_SetPose(GIMBAL_POSE_CENTER);
         } else if (ev == KEY_EVT_SHORT) {
             task = (openmv_task_t)(((uint8_t)task + 1U) % 4U);
             BspOpenmv_SetTask(task);
-            if      (task == OPENMV_TASK_TURN)  { BspGimbal_SetPose(GIMBAL_POSE_SIGN); }
-            else if (task == OPENMV_TASK_COLOR) { BspGimbal_SetPose(GIMBAL_POSE_COLOR); }
-            else if (task == OPENMV_TASK_PARK)  { BspGimbal_SetPose(GIMBAL_POSE_PARK); }
-            else                                { BspGimbal_SetPose(GIMBAL_POSE_CENTER); }
         }
 
         if ((uint32_t)(now - last_ctrl) >= CFG_MAIN_CTRL_PERIOD_MS) {
             last_ctrl = now;
-            BspGimbal_Update20ms();
             BspMotor_ControlStep(now, 0.02f);
         }
 
@@ -380,6 +337,16 @@ static void run_dbg_line_only(void)
                 BspGray_Sample(bias);
             }
             BspMotor_ControlStep(now, dt);
+            if (running != 0U) {
+                /* USART6 日志（PC6，115200），每 20 ms 一行：
+                 * 毫秒, 误差×100, 左目标, 右目标, M1..M4 实测 (mm/s)。阻塞发送约 4 ms，只在本调试模式用 */
+                const motor_state_t *ms = BspMotor_GetState();
+                BspUart_Printf(BSP_UART_DEBUG, "%lu,%d,%d,%d,%d,%d,%d,%d\r\n", (unsigned long)now,
+                               (int)(BspGray_GetState()->error * 100.0f),
+                               (int)ms->target_spd_mm_s[0], (int)ms->target_spd_mm_s[2],
+                               (int)ms->wheel_spd_mm_s[0], (int)ms->wheel_spd_mm_s[1],
+                               (int)ms->wheel_spd_mm_s[2], (int)ms->wheel_spd_mm_s[3]);
+            }
         }
 
         if ((uint32_t)(now - last_oled) >= CFG_OLED_REFRESH_PERIOD_MS) {
@@ -412,10 +379,9 @@ static void run_mission(mission_profile_t profile)
             last_ctrl = now;
             g_main_loop_ticks++;
 
-            BspGimbal_Update20ms();
             Mission_Step20ms(now, dt);
             BspMotor_ControlStep(now, dt);
-            /* OLED 每个控制周期最多发一页有变化的内容，单次阻塞约 10ms 以内 */
+            /* 屏幕每个控制周期最多发一条有变化的 8 行条带，阻塞约 2 ms */
             (void)BspOled_FlushStep();
         }
 
@@ -423,14 +389,14 @@ static void run_mission(mission_profile_t profile)
             last_oled = now;
             const motor_state_t  *m  = BspMotor_GetState();
             const openmv_state_t *mv = BspOpenmv_GetState();
-            const tof_state_t    *t  = BspTof_GetState();
+            const sonar_state_t  *us = BspSonar_GetState();
 
             BspOled_ShowRaceScreen(Mission_GetStateName(),
                                    m->total_dist_mm,
                                    mv->color_seq,
                                    mv->color_locked,
                                    Mission_GetForkDisplay(),
-                                   BspTof_IsHealthy(now) ? t->dist_mm : 0U,
+                                   BspSonar_IsHealthy(now) ? us->dist_mm : 0U,
                                    m->enc_online,
                                    mv->online);
         }
@@ -440,10 +406,7 @@ static void run_mission(mission_profile_t profile)
 
 int main(void)
 {
-
-
-
-                                                                                                                           system_bsp_init();
+    system_bsp_init();
 
 #if   (APP_RUN_MODE == RUN_MODE_RACE)
     run_mission(MISSION_PROFILE_FULL);
@@ -457,10 +420,8 @@ int main(void)
     run_dbg_motion_cal();
 #elif (APP_RUN_MODE == RUN_MODE_DBG_GRAY)
     run_dbg_gray();
-#elif (APP_RUN_MODE == RUN_MODE_DBG_TOF)
-    run_dbg_tof();
-#elif (APP_RUN_MODE == RUN_MODE_DBG_GIMBAL)
-    run_dbg_gimbal();
+#elif (APP_RUN_MODE == RUN_MODE_DBG_SONAR)
+    run_dbg_sonar();
 #elif (APP_RUN_MODE == RUN_MODE_DBG_OPENMV)
     run_dbg_openmv();
 #elif (APP_RUN_MODE == RUN_MODE_DBG_LINE_ONLY)

@@ -101,38 +101,27 @@ void UiPage_Gray(const gray_state_t *g, bool calib)
     BspOled_Footer("Long: Start/End Calib");
 }
 
-void UiPage_Tof(const tof_state_t *t, bool obstacle)
+void UiPage_Sonar(const sonar_state_t *s, bool healthy, bool obstacle)
 {
     char buf[32];
     BspOled_Clear();
-    BspOled_Title("VL53L0X", t->online ? OLED_C_GREEN : OLED_C_RED);
+    BspOled_Title("HC-SR04", healthy ? OLED_C_GREEN : OLED_C_RED);
 
-    BspOled_SetColor(t->online ? OLED_C_GREEN : OLED_C_RED);
-    BspOled_DrawStr(2U, 24U, t->online ? "ONLINE" : "NO DEV", 2U);
+    BspOled_SetColor(healthy ? OLED_C_GREEN : OLED_C_RED);
+    BspOled_DrawStr(2U, 24U, healthy ? "ECHO OK" : (s->online ? "NO ECHO" : "NO DEV"), 2U);
     BspOled_SetColor(OLED_C_YELLOW);
-    BspOled_Printf(2U, 46U, 3U, "%4u mm", (unsigned)t->dist_mm);
+    if (s->valid) {
+        BspOled_Printf(2U, 46U, 3U, "%4u mm", (unsigned)s->dist_mm);
+    } else {
+        BspOled_DrawStr(2U, 46U, " FAR   ", 3U);
+    }
     BspOled_SetColor(OLED_C_WHITE);
-    BspOled_Printf(2U, 78U, 1U, "RAW:%4umm  HITS:%u  %s",
-                   (unsigned)t->raw_mm, (unsigned)t->near_hits, t->valid ? "VALID" : "INVAL");
+    BspOled_Printf(2U, 76U, 1U, "RAW:%4umm ECHO:%5uus", (unsigned)s->raw_mm, (unsigned)s->echo_us);
+    BspOled_Printf(2U, 86U, 1U, "HITS:%u  MISS:%u", (unsigned)s->near_hits, (unsigned)s->miss_count);
     BspOled_SetColor(obstacle ? OLED_C_RED : OLED_C_GREEN);
-    BspOled_DrawStr(2U, 94U, obstacle ? "OBS: YES!" : "OBS: NO", 2U);
+    BspOled_DrawStr(2U, 98U, obstacle ? "OBS: YES!" : "OBS: NO", 2U);
     (void)snprintf(buf, sizeof(buf), "Trigger <= %u mm", (unsigned)CFG_OBS_TRIG_DIST_MM);
     BspOled_Footer(buf);
-}
-
-void UiPage_Gimbal(const char *pose_name, uint16_t pan_us, uint16_t tilt_us)
-{
-    BspOled_Clear();
-    BspOled_Title("GIMBAL", OLED_C_CYAN);
-
-    BspOled_SetColor(OLED_C_YELLOW);
-    BspOled_DrawStr(2U, 26U, pose_name, 3U);
-    BspOled_SetColor(OLED_C_WHITE);
-    BspOled_Printf(2U, 60U, 2U, "PAN :%4uus", (unsigned)pan_us);
-    BspOled_Printf(2U, 78U, 2U, "TILT:%4uus", (unsigned)tilt_us);
-    BspOled_SetColor(OLED_C_GRAY);
-    BspOled_DrawStr(2U, 100U, "PB8 PAN / PB9 TILT, 50Hz", 1U);
-    BspOled_Footer("Short: Next Pose");
 }
 
 void UiPage_Openmv(const openmv_state_t *mv, const char *cmd_name, const char *ack_name)
@@ -169,8 +158,14 @@ void UiPage_Line(const gray_state_t *g, const motor_state_t *m, bool running, co
     draw_gray_blocks(g->bits, 41U, 18U);
     BspOled_Printf(2U, 64U, 2U, "ERR:%+.2f", g->error);
     BspOled_SetColor(g->is_split ? OLED_C_YELLOW : OLED_C_WHITE);
-    BspOled_Printf(2U, 81U, 2U, "SPLIT:%s", g->is_split ? "YES" : "NO");
+    BspOled_Printf(2U, 83U, 1U, "SPLIT:%-3s  D:%6dmm", g->is_split ? "YES" : "NO", (int)m->total_dist_mm);
+    /* 左右轮目标/实测速度：差速给出来了轮子却没跟上，问题在轮速环或机械，不在循迹 PID */
     BspOled_SetColor(OLED_C_WHITE);
-    BspOled_Printf(2U, 98U, 2U, "D:%6dmm", (int)m->total_dist_mm);
+    BspOled_Printf(2U, 95U, 1U, "L T%+4d A%+4d mm/s",
+                   (int)(0.5f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1])),
+                   (int)(0.5f * (m->wheel_spd_mm_s[0] + m->wheel_spd_mm_s[1])));
+    BspOled_Printf(2U, 106U, 1U, "R T%+4d A%+4d mm/s",
+                   (int)(0.5f * (m->target_spd_mm_s[2] + m->target_spd_mm_s[3])),
+                   (int)(0.5f * (m->wheel_spd_mm_s[2] + m->wheel_spd_mm_s[3])));
     BspOled_Footer("Short:Go/Stop Long:Bias");
 }

@@ -13,7 +13,8 @@ import tempfile
 root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # stm32f407vet6
 work = tempfile.mkdtemp(prefix="sim_mut_")
 sim = os.path.join(root, 'test', 'sim')
-SRCS = ('App/mission_fsm.c', 'App/motion_ctrl.c', 'Bsp/bsp_motor.c', 'Bsp/bsp_openmv.c', 'Bsp/gray_logic.c')
+SRCS = ('App/mission_fsm.c', 'App/motion_ctrl.c', 'Bsp/bsp_motor.c', 'Bsp/bsp_openmv.c', 'Bsp/gray_logic.c',
+        'Bsp/sonar_logic.c')
 
 MUTS = {
     # 上一轮的 6 处
@@ -39,6 +40,19 @@ MUTS = {
     "灰度坏通道不补线": [("Bsp/gray_logic.c", r"bits |= (uint8_t)(1U << i);", r"(void)0;")],
     "循迹差速符号写反": [("App/motion_ctrl.c", r"float left_spd  = spd + diff;", r"float left_spd  = spd - diff;"),
                         ("App/motion_ctrl.c", r"float right_spd = spd - diff;", r"float right_spd = spd + diff;")],
+    "12 循迹微分不滤波": [("App/motion_ctrl.c", r"s_line_d_filt += CFG_LINE_D_LPF_ALPHA * (d_raw - s_line_d_filt);", r"s_line_d_filt = d_raw;")],
+    "12 复位后首拍微分突跳": [("App/motion_ctrl.c", r"float d_raw = s_line_have_prev ? ((err - s_line_prev_err) / dt_s * 0.02f) : 0.0f;", r"float d_raw = (err - s_line_prev_err) / dt_s * 0.02f;")],
+    "13 内侧轮不能制动": [("Bsp/bsp_motor.c", r"if (tgt > 0.0f && u < -(float)CFG_WHEEL_BRAKE_PWM) { u = -(float)CFG_WHEEL_BRAKE_PWM; }", r"if (tgt > 0.0f && u < 0.0f) { u = 0.0f; }")],
+    "13 制动不限幅": [("Bsp/bsp_motor.c", r"if (tgt > 0.0f && u < -(float)CFG_WHEEL_BRAKE_PWM) { u = -(float)CFG_WHEEL_BRAKE_PWM; }", r"(void)0;")],
+    "14 丢线差速不单独限幅": [("App/motion_ctrl.c", r"diff = clampf(diff, -CFG_LINE_LOST_DIFF_MM_S, CFG_LINE_LOST_DIFF_MM_S);", r"(void)0;")],
+    "14 正反转切换不清积分": [("Bsp/bsp_motor.c", r"if ((tgt > 0.0f) != (s_pid_prev_tgt[i] > 0.0f)) {", r"if (0) {")],
+    # 2026-11-23 激光换超声、取消云台
+    "15 超声不做中值": [("Bsp/sonar_logic.c", r"s->dist_mm = median3(s->med_buf[0], s->med_buf[1], s->med_buf[2]);", r"s->dist_mm = mm;")],
+    "15 空旷不进中值": [("Bsp/sonar_logic.c", r"s->med_buf[s->med_idx] = mm;", r"if (mm != SONAR_FAR_MM) s->med_buf[s->med_idx] = mm;")],
+    "15 超声失效不急停": [("App/mission_fsm.c", r"if (gate_ok && !BspSonar_IsHealthy(now_ms)) {", r"if (0) {")],
+    "15 超声失效仍起跑": [("App/mission_fsm.c", r"(s_profile != MISSION_PROFILE_PARK_ONLY) && !BspSonar_IsHealthy(now_ms)) {", r"0) {")],
+    "16 丢线不按转角停": [("App/mission_fsm.c", r"|| (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)", r"")],
+    "15 视觉任务不下发": [("App/mission_fsm.c", r"if (BspOpenmv_GetState()->target_task != task) {", r"if (0) {")],
 }
 
 ONLY = sys.argv[1:]

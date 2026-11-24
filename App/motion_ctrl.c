@@ -8,9 +8,13 @@
 /* 循迹 PID 状态 */
 static float s_line_integ = 0.0f;
 static float s_line_prev_err = 0.0f;
+static float s_line_d_filt = 0.0f;      /* 低通后的微分项（单位：每 20 ms 的误差变化） */
+static bool  s_line_have_prev = false;  /* 复位后第一拍没有上一拍误差，不算微分，免得起步突跳 */
 static bool  s_line_lost = false;
 static float s_lost_start_mm = 0.0f;    /* 本次丢线开始时的总里程 */
 static float s_lost_mm = 0.0f;          /* 本次连续丢线已行驶的距离 */
+static float s_lost_start_yaw = 0.0f;   /* 本次丢线开始时的累计航向 */
+static float s_lost_deg = 0.0f;         /* 本次连续丢线已转过的角度 */
 
 /* 定距直行 / 原地转向目标状态 */
 static float s_tgt_dist_mm = 0.0f;
@@ -69,13 +73,21 @@ void Motion_ResetLinePid(void)
 {
     s_line_integ = 0.0f;
     s_line_prev_err = 0.0f;
+    s_line_d_filt = 0.0f;
+    s_line_have_prev = false;
     s_line_lost = false;
     s_lost_mm = 0.0f;
+    s_lost_deg = 0.0f;
 }
 
 float Motion_GetLineLostMm(void)
 {
     return s_lost_mm;
+}
+
+float Motion_GetLineLostDeg(void)
+{
+    return s_lost_deg;
 }
 
 void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, float dt_s)
@@ -91,22 +103,23 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
      * err > 0: 黑线在右，需右转 (左轮快、右轮慢) */
     float err = g->error;
     s_line_integ = clampf(s_line_integ + err * dt_s, -2.0f, 2.0f);
-    float deriv = (err - s_line_prev_err) / dt_s;
+    /* 8 路灰度的误差是一格 0.5 地跳，直接差分会把每次跳格放大成一个尖峰（直道高频抖），
+     * 所以微分先做一阶低通。单位折算成“每 20 ms 的误差变化”，KD 的含义与控制周期无关 */
+    float d_raw = s_line_have_prev ? ((err - s_line_prev_err) / dt_s * 0.02f) : 0.0f;
+    s_line_have_prev = true;
     s_line_prev_err = err;
+    s_line_d_filt += CFG_LINE_D_LPF_ALPHA * (d_raw - s_line_d_filt);
 
     float diff = CFG_LINE_PID_KP * err +
                  CFG_LINE_PID_KI * s_line_integ +
-                 CFG_LINE_PID_KD * deriv * 0.02f;
+                 CFG_LINE_PID_KD * s_line_d_filt;
     diff = clampf(diff, -CFG_LINE_DIFF_MAX_MM_S, CFG_LINE_DIFF_MAX_MM_S);
 
-    /* 大偏差（如 30cm 圆角急弯）适度降基速，防止甩出黑线 */
+    /* 偏差越大越减速（主文档 6.2：base' = base × (1 − k·|err|)）。连续降速，不用台阶：
+     * 弯里误差在台阶阈值两侧跳时，基速会跟着一拍一拍地跳，车身就抖 */
     float abs_err = fabsf(err);
-    float spd = base_speed_mm_s;
-    if (abs_err > 2.2f) {
-        spd *= 0.72f;
-    } else if (abs_err > 1.2f) {
-        spd *= 0.86f;
-    }
+    float spd = base_speed_mm_s *
+                clampf(1.0f - CFG_LINE_SLOW_PER_ERR * abs_err, CFG_LINE_SLOW_MIN_SCALE, 1.0f);
 
     /* 丢线：按上次方向低速找线，并累计丢线行驶距离供状态机判 LINE_LOST */
     const motor_state_t *m = BspMotor_GetState();
@@ -114,13 +127,20 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
         if (!s_line_lost) {
             s_line_lost = true;
             s_lost_start_mm = m->total_dist_mm;
+            s_lost_start_yaw = m->total_yaw_deg;
         }
         float d = m->total_dist_mm - s_lost_start_mm;
         s_lost_mm = (d >= 0.0f) ? d : -d;
+        /* 找线接近原地转，前进很慢，只按距离判要转好几圈才停，所以另按转角判 */
+        s_lost_deg = fabsf(m->total_yaw_deg - s_lost_start_yaw);
         spd = base_speed_mm_s * CFG_LINE_LOST_SPEED_SCALE;
+        /* 丢线时误差固定为 ±3.8，乘 KP 往往直接顶满差速限幅，车近乎原地猛转，
+         * 再见到线时转速太快就冲过头（直角弯来回摆）。找线差速单独限幅 */
+        diff = clampf(diff, -CFG_LINE_LOST_DIFF_MM_S, CFG_LINE_LOST_DIFF_MM_S);
     } else {
         s_line_lost = false;
         s_lost_mm = 0.0f;
+        s_lost_deg = 0.0f;
     }
 
     float left_spd  = spd + diff;

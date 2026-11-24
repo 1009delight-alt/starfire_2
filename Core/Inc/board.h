@@ -30,12 +30,6 @@
 #define DBG_UART_RX_PORT        GPIOC
 #define DBG_UART_RX_PIN         GPIO_PIN_7
 
-/* 双轴云台 TIM4_CH3 / TIM4_CH4 */
-#define GIMBAL_PAN_PORT         GPIOB
-#define GIMBAL_PAN_PIN          GPIO_PIN_8      /* 水平轴 */
-#define GIMBAL_TILT_PORT        GPIOB
-#define GIMBAL_TILT_PIN         GPIO_PIN_9      /* 俯仰轴 */
-
 /* 八路灰度传感器 */
 #define GRAY_AD0_PORT           GPIOE
 #define GRAY_AD0_PIN            GPIO_PIN_2
@@ -46,11 +40,13 @@
 #define GRAY_ADC_PORT           GPIOC
 #define GRAY_ADC_PIN            GPIO_PIN_0      /* ADC1_IN10 */
 
-/* 前向激光测距 VL53L0X（软件 I2C） */
-#define TOF_I2C_SCL_PORT        GPIOB
-#define TOF_I2C_SCL_PIN         GPIO_PIN_6
-#define TOF_I2C_SDA_PORT        GPIOB
-#define TOF_I2C_SDA_PIN         GPIO_PIN_7
+/* 前向超声测距 HC-SR04（沿用原激光 PB6/PB7 两根线）。模块 Vcc 接 5 V，GND 共地。
+ * Echo 输出 5 V，PB7 是 5 V 容忍（FT）引脚可以直接接；保险起见可串 1 kΩ */
+#define SONAR_TRIG_PORT         GPIOB
+#define SONAR_TRIG_PIN          GPIO_PIN_6      /* 推挽输出，>=10 us 高电平触发 */
+#define SONAR_ECHO_PORT         GPIOB
+#define SONAR_ECHO_PIN          GPIO_PIN_7      /* TIM4_CH2（AF2）双边沿输入捕获 */
+/* 原云台 PB8/PB9（TIM4_CH3/CH4）不再使用，OpenMV 固定装在车右前方 */
 
 /* 四色结果显示屏：1.8 寸 128x160 SPI TFT（ST7735S），硬件 SPI2，只写 */
 #define TFT_SCK_PORT            GPIOB

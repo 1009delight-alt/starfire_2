@@ -11,7 +11,7 @@ solution:
       target-set:
         - set:
           debugger:
-            name: ST-Link@pyOCD
+            name: CMSIS-DAP@pyOCD
             protocol: swd
             clock: 1000000
   build-types:

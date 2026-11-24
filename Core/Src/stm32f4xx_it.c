@@ -1,6 +1,7 @@
 #include "board.h"
 #include "bsp_uart.h"
 #include "bsp_motor.h"
+#include "bsp_sonar.h"
 
 void SysTick_Handler(void)
 {
@@ -21,6 +22,11 @@ void USART2_IRQHandler(void)
 void USART6_IRQHandler(void)
 {
     BspUart_IRQHandler(BSP_UART_DEBUG);
+}
+
+void TIM4_IRQHandler(void)
+{
+    BspSonar_IRQHandler();   /* HC-SR04 Echo 双边沿捕获 */
 }
 
 /* 所有致命异常：先直接发零 PWM 停车，再亮灯死等。

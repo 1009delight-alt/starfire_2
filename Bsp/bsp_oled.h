@@ -49,7 +49,7 @@ void BspOled_ShowRaceScreen(const char *stage_name,
                             const char *color_seq,
                             bool color_locked,
                             char turn_dir,
-                            uint16_t tof_mm,
+                            uint16_t sonar_mm,
                             bool enc_ok,
                             bool mv_ok);
 

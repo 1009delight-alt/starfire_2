@@ -131,7 +131,7 @@ static void run_page(const char *dir, const char *name, page_fn fn)
 /* ==================== 示例数据 ==================== */
 static motor_state_t m;
 static gray_state_t g;
-static tof_state_t t;
+static sonar_state_t t;
 static openmv_state_t mv;
 
 static void p_race(void)  { BspOled_ShowRaceScreen("COLOR_SCAN", 5234.0f, "R-G-B-Y", true, 'L', 245U, true, false); }
@@ -139,8 +139,7 @@ static void p_idle(void)  { BspOled_ShowRaceScreen("IDLE>FULL", 0.0f, "", false,
 static void p_motor(void) { UiPage_MotorEnc(&m, 2U); }
 static void p_cal(void)   { UiPage_MotionCal(&m, true, 1U); }
 static void p_gray(void)  { UiPage_Gray(&g, false); }
-static void p_tof(void)   { UiPage_Tof(&t, true); }
-static void p_gimbal(void){ UiPage_Gimbal("COLOR", 1500U, 1350U); }
+static void p_sonar(void) { UiPage_Sonar(&t, true, true); }
 static void p_mv(void)    { UiPage_Openmv(&mv, "COLOR", "TURN"); }
 static void p_line(void)  { UiPage_Line(&g, &m, true, "LEFT"); }
 
@@ -165,7 +164,7 @@ int main(int argc, char **argv)
     const uint16_t raw[8] = { 300, 450, 1200, 3600, 3900, 2100, 600, 4095 };
     for (int i = 0; i < 8; ++i) { g.raw[i] = raw[i]; g.thresh[i] = 2000; }
     g.bits = 0x18; g.error = -0.75f; g.is_split = true; g.line_found = true;
-    t.online = true; t.valid = true; t.dist_mm = 345; t.raw_mm = 350; t.near_hits = 2;
+    t.online = true; t.valid = true; t.dist_mm = 345; t.raw_mm = 350; t.echo_us = 2041; t.near_hits = 2; t.miss_count = 1;
     mv.online = true; mv.fps = 28; mv.target_task = OPENMV_TASK_COLOR; mv.ack_task = OPENMV_TASK_TURN;
     mv.turn_dir = 'L'; mv.park_seen = true; mv.park_cx = -35; mv.park_area = 1234; mv.bad_frame_count = 3;
     strcpy(mv.color_seq, "R-G-B");
@@ -175,19 +174,18 @@ int main(int argc, char **argv)
     run_page(dir, "2_motor",  p_motor);
     run_page(dir, "3_cal",    p_cal);
     run_page(dir, "4_gray",   p_gray);
-    run_page(dir, "5_tof",    p_tof);
-    run_page(dir, "6_gimbal", p_gimbal);
-    run_page(dir, "7_openmv", p_mv);
-    run_page(dir, "8_line",   p_line);
+    run_page(dir, "5_sonar",  p_sonar);
+    run_page(dir, "6_openmv", p_mv);
+    run_page(dir, "7_line",   p_line);
 
     CHECK(out_of_window == 0, "%d pixels written outside the window", out_of_window);
     CHECK(spi_while_cs_high == 0, "SPI bytes sent while CS high");
 
     /* 只改一个数：只应重发受影响的条带 */
-    p_tof(); (void)flush_all("tof-base");
+    p_sonar(); (void)flush_all("sonar-base");
     t.dist_mm = 346;
-    p_tof();
-    int steps = flush_all("tof-delta");
+    p_sonar();
+    int steps = flush_all("sonar-delta");
     CHECK(steps >= 1 && steps <= 4, "changing one number resent %d bands", steps);
 
     printf(g_fail ? "%d check(s) FAILED\n" : "all checks passed\n", g_fail);

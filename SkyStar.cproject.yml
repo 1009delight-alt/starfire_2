@@ -26,8 +26,8 @@ project:
         - file: ./Bsp/bsp_motor.c
         - file: ./Bsp/bsp_gray.c
         - file: ./Bsp/gray_logic.c
-        - file: ./Bsp/bsp_tof.c
-        - file: ./Bsp/bsp_gimbal.c
+        - file: ./Bsp/bsp_sonar.c
+        - file: ./Bsp/sonar_logic.c
         - file: ./Bsp/bsp_openmv.c
         - file: ./Bsp/bsp_oled.c
     - group: Device

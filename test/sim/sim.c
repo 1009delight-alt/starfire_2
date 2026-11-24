@@ -1,7 +1,7 @@
 /* 主控状态机电脑回放。
  *
  * 编译真实的 App/mission_fsm.c、App/motion_ctrl.c、Bsp/bsp_motor.c、Bsp/bsp_openmv.c，
- * 把串口、按键、灰度、激光、云台换成本文件里可按脚本控制的模拟件：
+ * 把串口、按键、灰度、超声换成本文件里可按脚本控制的模拟件（超声读数处理 sonar_logic.c 用真实代码单测）：
  *   - 电机板：解析主控发出的 $pwm，按一阶模型算轮速、积分出累计计数，每 10 ms 回一帧 $MAll；
  *   - 相机：解析 $CMD，回 $ACK、每 500 ms 心跳，按用例配置回转向 / P 牌结果；
  *   - 时钟：1 ms 一步；每 20 ms 依次调用 Mission_Step20ms 和 BspMotor_ControlStep，与 main.c 一致。
@@ -20,11 +20,11 @@
 #include "bsp_motor.h"
 #include "bsp_openmv.h"
 #include "bsp_gray.h"
-#include "bsp_tof.h"
-#include "bsp_gimbal.h"
+#include "bsp_sonar.h"
 #include "motion_ctrl.h"
 #include "mission_fsm.h"
 #include "gray_logic.h"
+#include "sonar_logic.h"
 
 /* ==================== 时钟 ==================== */
 static uint32_t g_now = 0U;
@@ -86,7 +86,7 @@ bool Board_KeyCheckStartEdge(uint32_t now_ms) { (void)now_ms; bool e = g_estop; 
 void Board_LedSetPattern(board_led_pattern_t p) { (void)p; }
 void Board_LedSet(bool on) { (void)on; }
 
-/* ==================== 灰度 / 激光 / 云台 ==================== */
+/* ==================== 灰度 / 超声 ==================== */
 static gray_state_t g_gray;
 static bool g_line = true;
 static bool g_gray_scripted = false;    /* true：按 g_gray_raw_hw 走真实的 GrayLogic_Process */
@@ -128,32 +128,22 @@ void BspGray_CalibStart(void) { }
 void BspGray_CalibFeed(void) { }
 void BspGray_CalibFinishAndApply(void) { }
 
-static tof_state_t g_tof;
+static sonar_state_t g_sim_sonar;
 static bool g_obstacle = false;
-bool BspTof_Init(void) { return true; }
-void BspTof_Update(uint32_t now_ms) { (void)now_ms; }
-void BspTof_ResetTrigger(void) { }
-bool BspTof_IsHealthy(uint32_t now_ms) { (void)now_ms; return true; }
-bool BspTof_IsObstacleDetected(uint32_t now_ms) { (void)now_ms; return g_obstacle; }
-const tof_state_t *BspTof_GetState(void) { return &g_tof; }
-
-static int g_pose = -1;
-static uint32_t g_pose_settle_at = 0U;
-void BspGimbal_Init(void) { }
-void BspGimbal_SetPose(gimbal_pose_t p)
-{
-    if ((int)p != g_pose) { g_pose = (int)p; g_pose_settle_at = g_now + 500U; }
-}
-void BspGimbal_SetTargetUs(uint16_t a, uint16_t b) { (void)a; (void)b; }
-void BspGimbal_Update20ms(void) { }
-bool BspGimbal_IsSettled(uint32_t now_ms) { return now_ms >= g_pose_settle_at; }
-uint16_t BspGimbal_GetPanUs(void) { return 1500U; }
-uint16_t BspGimbal_GetTiltUs(void) { return 1500U; }
-const char *BspGimbal_PoseName(gimbal_pose_t p) { (void)p; return "SIM"; }
+static bool g_sonar_ok = true;
+bool BspSonar_Init(void) { return true; }
+void BspSonar_Update(uint32_t now_ms) { (void)now_ms; }
+void BspSonar_IRQHandler(void) { }
+void BspSonar_ResetTrigger(void) { }
+bool BspSonar_IsHealthy(uint32_t now_ms) { (void)now_ms; return g_sonar_ok; }
+bool BspSonar_IsObstacleDetected(uint32_t now_ms) { (void)now_ms; return g_sonar_ok && g_obstacle; }
+const sonar_state_t *BspSonar_GetState(void) { return &g_sim_sonar; }
 
 /* ==================== 电机板模型 ==================== */
 static int   g_pwm[4];
 static float g_v[4];            /* 实际轮速 mm/s（前进为正） */
+static int   g_drag_mask = 0;   /* bit i：第 i 轮被车身拖着，速度固定为 g_drag_v */
+static float g_drag_v = 0.0f;
 static double g_pos[4];         /* 实际轮行程 mm */
 static int32_t g_raw_out[4];    /* 回传的累计计数 */
 static bool  g_enc_frozen = false;
@@ -180,6 +170,7 @@ static void motor_world_1ms(void)
             if (u < 0.0f) { tgt = -tgt; }
         }
         g_v[i] += (tgt - g_v[i]) * (1.0f / 50.0f);      /* 时间常数约 50 ms */
+        if ((g_drag_mask & (1 << i)) != 0) { g_v[i] = g_drag_v; }   /* 被车身拖着走：轮速不由本轮 PWM 决定 */
         g_pos[i] += g_v[i] * 0.001;
         if (!g_enc_frozen) {
             g_raw_out[i] = (int32_t)lround(g_pos[i] * CFG_ENC_COUNTS_PER_MM) * k_sign[i];
@@ -321,11 +312,12 @@ static void sim_reset_world(void)
     g_now = 0U;
     memset(g_rx, 0, sizeof g_rx);
     memset(g_pwm, 0, sizeof g_pwm);
+    g_drag_mask = 0; g_drag_v = 0.0f;
     memset(g_v, 0, sizeof g_v);
     memset(g_pos, 0, sizeof g_pos);
     memset(g_raw_out, 0, sizeof g_raw_out);
     memset(g_cam_cmd_count, 0, sizeof g_cam_cmd_count);
-    g_enc_frozen = false; g_load = 1.0f; g_line = true; g_obstacle = false;
+    g_enc_frozen = false; g_load = 1.0f; g_line = true; g_obstacle = false; g_sonar_ok = true;
     g_cam_turn_answer = 0; g_cam_park_aligned = false;
     g_cam_order[0] = '\0'; g_cam_last_seed[0] = '\0';
     g_gray_scripted = false;
@@ -335,7 +327,7 @@ static void sim_reset_world(void)
         memcpy(g_gray.thresh, th, sizeof th);
     }
     snprintf(g_cam_task, sizeof g_cam_task, "IDLE");
-    g_cam_last_hb = 0U; g_pose = -1; g_pose_settle_at = 0U;
+    g_cam_last_hb = 0U;
     g_key_ev = KEY_EVT_NONE; g_estop = false;
 
     BspMotor_Init();
@@ -354,7 +346,6 @@ static void run_ms(uint32_t ms)
         BspMotor_PollRx(g_now);
         BspOpenmv_Poll(g_now);
         if ((g_now % CFG_MAIN_CTRL_PERIOD_MS) == 0U) {
-            BspGimbal_Update20ms();
             Mission_Step20ms(g_now, CFG_MAIN_CTRL_PERIOD_MS * 0.001f);
             BspMotor_ControlStep(g_now, CFG_MAIN_CTRL_PERIOD_MS * 0.001f);
         }
@@ -414,7 +405,7 @@ static void case_cam_restart(void)
     sim_reset_world();
     run_ms(1000);
     start_stage(2);                                   /* 从分岔起跑 */
-    run_ms(800);                                      /* 云台稳定后下发 TURN */
+    run_ms(800);                                      /* TURN 已下发，相机已确认 */
     check(strcmp(g_cam_task, "TURN") == 0, "起跑后相机处于 TURN");
     int before = g_cam_cmd_count[1];
     cam_restart();
@@ -691,6 +682,21 @@ static void case_fork_rerun(void)
     run_ms(2500);
     check(Mission_GetForkDisplay() == 'R', "最终锁定本轮的 R（当前 %c）",
           Mission_GetForkDisplay() ? Mission_GetForkDisplay() : '-');
+
+    /* 无云台后 view_set 在任务相同时不重发：起跑前相机已在 TURN 且留有旧方向，进分岔不能直接沿用 */
+    sim_reset_world();
+    run_ms(1000);
+    g_cam_turn_answer = 'L';
+    BspOpenmv_SetTask(OPENMV_TASK_TURN);
+    run_ms(500);
+    check(BspOpenmv_GetState()->turn_dir == 'L', "起跑前驱动层留有旧方向 L");
+    g_cam_turn_answer = 'R';
+    g_cam_last_turn = g_now;                          /* 下一帧方向 200 ms 后才到 */
+    start_stage(2);
+    run_ms(20);
+    check(Mission_GetForkDisplay() != 'L', "任务未重发时也不锁旧方向（当前 %c）",
+          Mission_GetForkDisplay() ? Mission_GetForkDisplay() : '-');
+    BspMotor_Stop();
 }
 
 /* 6. 同一控制周期内先“已对齐”后“已丢失” */
@@ -727,6 +733,193 @@ static void case_park_happy(void)
     check(all_pwm_zero(), "停车");
 }
 
+/* 12. 循迹微分：复位后第一拍不突跳；误差在相邻两格之间来回跳时，D 项被低通压住 */
+static float line_step_diff(const char *pat)
+{
+    sim_gray(pat);
+    Motion_LineFollowStep(140.0f, GRAY_BIAS_CENTER, 0.02f);
+    const motor_state_t *m = BspMotor_GetState();
+    float left = 0.5f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1]);
+    float right = 0.5f * (m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    return 0.5f * (left - right);
+}
+
+static void case_line_deriv(void)
+{
+    printf("\n== 12 循迹微分低通\n");
+    sim_reset_world();
+    Motion_ResetLinePid();
+    float d0 = line_step_diff("00001100");                /* 误差 +1.0 */
+    float p0 = CFG_LINE_PID_KP * BspGray_GetState()->error;
+    check(fabsf(d0 - p0) < 1.0f, "复位后第一拍只有 P 项（差速 %.1f，P %.1f）", d0, p0);
+
+    float worst = 0.0f;
+    for (int i = 0; i < 40; ++i) {                        /* 0 与 +0.5 每拍交替 */
+        float d = line_step_diff((i & 1) ? "00011000" : "00001000");
+        float dterm = fabsf(d - CFG_LINE_PID_KP * BspGray_GetState()->error);
+        if ((i >= 20) && (dterm > worst)) { worst = dterm; }
+    }
+    float raw = CFG_LINE_PID_KD * 0.5f;
+    check(worst < 0.5f * raw, "误差跳格时 D 项峰值 %.1f < 不滤波时 %.1f 的一半", worst, raw);
+    BspMotor_Stop();
+}
+
+/* 13. 内侧轮被拖着走：目标为正时允许有限的制动 PWM，但不超过 CFG_WHEEL_BRAKE_PWM */
+static void case_wheel_brake(void)
+{
+    printf("\n== 13 内侧轮制动\n");
+    sim_reset_world();
+    run_ms(200);
+    BspMotor_SetDiffSpeed(300.0f, 40.0f);
+    g_drag_mask = (1 << 2) | (1 << 3);                  /* 右侧两轮被拖到 250 mm/s */
+    g_drag_v = 250.0f;
+    int min_pwm = 0;
+    for (int t = 0; t < 1500; t += 20) {
+        run_ms(20);
+        if (g_pwm[2] < min_pwm) { min_pwm = g_pwm[2]; }
+    }
+    check(min_pwm < 0, "被拖的内侧轮输出制动 PWM（最低 %d）", min_pwm);
+    check(min_pwm >= -CFG_WHEEL_BRAKE_PWM, "制动 PWM 不超过限幅 %d", CFG_WHEEL_BRAKE_PWM);
+    check(g_pwm[0] > 0, "外侧轮仍正向驱动（%d）", g_pwm[0]);
+    g_drag_mask = 0;
+    BspMotor_Stop();
+    run_ms(300);
+}
+
+/* 14. 直角弯相关：丢线找线差速单独限幅；降速连续；轮子正反转切换时清积分 */
+static void case_corner(void)
+{
+    printf("\n== 14 直角弯\n");
+    sim_reset_world();
+    Motion_ResetLinePid();
+    (void)line_step_diff("10000000");                     /* 线在最左，记下方向 */
+    float lost = 0.0f;
+    for (int i = 0; i < 5; ++i) { lost = line_step_diff("00000000"); }
+    check(fabsf(lost) <= CFG_LINE_LOST_DIFF_MM_S + 0.5f && lost < 0.0f,
+          "丢线找线差速 %.0f，方向向左且不超过 %.0f", lost, CFG_LINE_LOST_DIFF_MM_S);
+
+    Motion_ResetLinePid();
+    (void)line_step_diff("00011100");                     /* 误差 +0.5 */
+    const motor_state_t *m = BspMotor_GetState();
+    float avg_a = 0.25f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1] + m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    Motion_ResetLinePid();
+    (void)line_step_diff("00001110");                     /* 误差 +1.5 */
+    float avg_b = 0.25f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1] + m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    float want_a = 140.0f * (1.0f - CFG_LINE_SLOW_PER_ERR * 0.5f);
+    float want_b = 140.0f * (1.0f - CFG_LINE_SLOW_PER_ERR * 1.5f);
+    check(fabsf(avg_a - want_a) < 1.0f && fabsf(avg_b - want_b) < 1.0f,
+          "降速连续：误差 0.5 → %.1f（应 %.1f），1.5 → %.1f（应 %.1f）", avg_a, want_a, avg_b, want_b);
+    BspMotor_Stop();
+
+    /* 轮子带不动时积分攒满，再把目标改成反向：第一拍输出就该是反向 */
+    sim_reset_world();
+    run_ms(200);
+    g_load = 0.15f;
+    BspMotor_SetDiffSpeed(300.0f, 300.0f);
+    run_ms(1500);
+    BspMotor_SetDiffSpeed(-30.0f, 300.0f);
+    run_to_before_step();
+    run_ms(1);
+    check(g_pwm[0] < 0, "目标转反向后的第一拍左轮 PWM 为反向（%d）", g_pwm[0]);
+    g_load = 1.0f;
+    BspMotor_Stop();
+    run_ms(300);
+}
+
+
+/* 15. 超声：读数处理（真实 sonar_logic.c）、失效急停、视觉任务立即下发（无云台） */
+static void sonar_feed_mm(sonar_state_t *s, uint32_t mm, uint32_t t)
+{
+    SonarLogic_FeedEcho(s, (uint32_t)((float)mm / CFG_SONAR_MM_PER_US + 0.5f), t,
+                        CFG_SONAR_MM_PER_US, CFG_SONAR_MAX_MM, CFG_OBS_TRIG_DIST_MM);
+}
+
+static void case_sonar(void)
+{
+    printf("\n== 15 超声与固定相机\n");
+    sonar_state_t s;
+    SonarLogic_Reset(&s);
+    check(!s.online && !s.valid && s.near_hits == 0U, "复位后离线、无有效读数");
+
+    sonar_feed_mm(&s, 500U, 100U);
+    check(s.online && s.last_update_ms == 100U && s.raw_mm >= 499U && s.raw_mm <= 501U,
+          "回波 -> 距离换算（500 mm -> %u）", (unsigned)s.raw_mm);
+
+    /* 远处：38 ms 无目标回波记为空旷，算正常读数 */
+    SonarLogic_Reset(&s);
+    SonarLogic_FeedEcho(&s, 38000U, 10U, CFG_SONAR_MM_PER_US, CFG_SONAR_MAX_MM, CFG_OBS_TRIG_DIST_MM);
+    check(s.online && !s.valid && s.raw_mm == SONAR_FAR_MM && s.near_hits == 0U, "无目标回波记为空旷且不算近");
+
+    /* 单次近读数（地面反射等）不触发；连续近读数才累计 */
+    SonarLogic_Reset(&s);
+    sonar_feed_mm(&s, 900U, 0U); sonar_feed_mm(&s, 900U, 60U);
+    sonar_feed_mm(&s, 150U, 120U);
+    check(s.near_hits == 0U, "单次近读数被中值滤掉（hits=%u）", (unsigned)s.near_hits);
+    sonar_feed_mm(&s, 900U, 180U); sonar_feed_mm(&s, 900U, 200U);   /* 把 150 挤出中值窗口 */
+    sonar_feed_mm(&s, 200U, 240U);
+    check(s.near_hits == 0U, "一次近读数不进入触发距离（hits=%u）", (unsigned)s.near_hits);
+    sonar_feed_mm(&s, 190U, 300U);
+    check(s.near_hits == 1U && s.dist_mm <= CFG_OBS_TRIG_DIST_MM, "两次近读数后中值进入触发距离（%u mm）", (unsigned)s.dist_mm);
+    sonar_feed_mm(&s, 180U, 360U);
+    check(s.near_hits >= CFG_OBS_CONFIRM_FRAMES, "连续近读数达到确认次数（hits=%u）", (unsigned)s.near_hits);
+
+    /* 近距中偶尔漏一次回波（超量程）不应清零 */
+    sonar_feed_mm(&s, 5000U, 420U);
+    check(s.near_hits >= CFG_OBS_CONFIRM_FRAMES, "近距中漏一次回波不清零（hits=%u）", (unsigned)s.near_hits);
+    sonar_feed_mm(&s, 5000U, 480U);
+    check(s.near_hits == 0U, "连续两次空旷后清零");
+
+    /* 视觉任务切换立即下发：从分岔起跑，40 ms 内相机就应收到 TURN */
+    sim_reset_world();
+    run_ms(1000);
+    int turn0 = g_cam_cmd_count[1];
+    start_stage(2);
+    check(g_cam_cmd_count[1] > turn0 && strcmp(g_cam_task, "TURN") == 0, "起跑分岔段后立即下发 TURN（无云台等待）");
+    BspMotor_Stop();
+
+    /* 避障窗口内超声失效：急停报 SONAR_LOST */
+    sim_reset_world();
+    run_ms(1000);
+    start_stage(1);                                   /* 从避障段起跑：门控立即生效 */
+    run_ms(200);
+    check(Mission_GetState() == ST_TRACK_TO_OBS, "避障段起跑后在循迹");
+    g_sonar_ok = false;
+    run_ms(60);
+    check(Mission_GetState() == ST_FAULT && strcmp(Mission_GetFaultReason(), "SONAR_LOST") == 0,
+          "超声失效急停（%s）", Mission_GetFaultReason());
+    check(all_pwm_zero(), "急停后 PWM 全零");
+
+    /* IDLE 下超声失效不允许从完整赛程起跑 */
+    sim_reset_world();
+    g_sonar_ok = false;
+    run_ms(1000);
+    key(KEY_EVT_SHORT);
+    check(Mission_GetState() == ST_IDLE && strcmp(Mission_GetStateName(), "WAIT:SONAR") == 0,
+          "超声失效时不起跑（%s）", Mission_GetStateName());
+}
+
+
+/* 16. 丢线找线近原地转：按转角也要报 LINE_LOST，不能转好几圈 */
+static void case_lost_spin(void)
+{
+    printf("\n== 16 丢线转角保护\n");
+    sim_reset_world();
+    run_ms(1000);
+    start_stage(2);                                   /* 从分岔起跑：没有避障门控干扰 */
+    g_cam_turn_answer = 'R';
+    sim_gray("00000011");                             /* 线在最右 */
+    run_ms(300);
+    float yaw0 = BspMotor_GetState()->total_yaw_deg;
+    float dist0 = BspMotor_GetState()->total_dist_mm;
+    sim_gray("00000000");                             /* 丢线 */
+    bool got = wait_state(ST_FAULT, 6000U);
+    float turned = fabsf(BspMotor_GetState()->total_yaw_deg - yaw0);
+    check(got && strcmp(Mission_GetFaultReason(), "LINE_LOST") == 0, "丢线后报 LINE_LOST（%s）", Mission_GetFaultReason());
+    check(turned <= CFG_LINE_LOST_MAX_DEG + 60.0f, "停下前转过 %.0f°，不超过 %.0f° 太多", turned, CFG_LINE_LOST_MAX_DEG);
+    float moved = fabsf(BspMotor_GetState()->total_dist_mm - dist0);
+    check(moved < CFG_LINE_LOST_MAX_MM, "是转角先到限（丢线后前进 %.0f mm）", moved);
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -741,6 +934,11 @@ int main(void)
     case_fork_steer();
     case_gray_config();
     case_gray_dead();
+    case_line_deriv();
+    case_wheel_brake();
+    case_corner();
+    case_sonar();
+    case_lost_spin();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

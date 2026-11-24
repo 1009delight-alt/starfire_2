@@ -10,7 +10,8 @@ $src  = @(
     "$root\App\motion_ctrl.c",
     "$root\Bsp\bsp_motor.c",
     "$root\Bsp\bsp_openmv.c",
-    "$root\Bsp\gray_logic.c"
+    "$root\Bsp\gray_logic.c",
+    "$root\Bsp\sonar_logic.c"
 )
 & gcc -std=c11 -Wall -Wextra -Wno-unused-function -O1 -I "$sim\stub" -I "$root\Core\Inc" -I "$root\Bsp" -I "$root\App" -o $out @src -lm
 if ($LASTEXITCODE -ne 0) { throw "编译失败" }

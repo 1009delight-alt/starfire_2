@@ -4,8 +4,7 @@
 #include "config.h"
 #include "bsp_motor.h"
 #include "bsp_gray.h"
-#include "bsp_tof.h"
-#include "bsp_gimbal.h"
+#include "bsp_sonar.h"
 #include "bsp_openmv.h"
 
 #include <math.h>
@@ -47,10 +46,6 @@ static char     s_name_buf[16];
 /* 按键：进入 IDLE/FAULT 后必须先松开，之后新按下的键才有效 */
 static bool     s_key_armed = false;
 static uint32_t s_key_arm_ms = 0U;
-
-/* 云台到位后再下发的视觉任务 */
-static bool          s_task_pending = false;
-static openmv_task_t s_pending_task = OPENMV_TASK_IDLE;
 
 /* 分岔 */
 static char     s_locked_fork_dir = 0;
@@ -101,31 +96,11 @@ static bool key_event_valid_after_arm(uint32_t now_ms, board_key_event_t *ev_out
     return true;
 }
 
-static void view_request(gimbal_pose_t pose, openmv_task_t task)
+/* OpenMV 固定在车右前方（无云台），任务切换立即下发；与当前任务相同时不重发 */
+static void view_set(openmv_task_t task)
 {
-    const openmv_state_t *mv = BspOpenmv_GetState();
-    BspGimbal_SetPose(pose);
-    if (task == OPENMV_TASK_IDLE) {
-        s_task_pending = false;
-        if (mv->target_task != OPENMV_TASK_IDLE) {
-            BspOpenmv_SetTask(OPENMV_TASK_IDLE);
-        }
-        return;
-    }
-    if ((mv->target_task != OPENMV_TASK_IDLE) && (mv->target_task != task)) {
-        BspOpenmv_SetTask(OPENMV_TASK_IDLE);    /* 转动期间停掉旧任务 */
-    }
-    if (mv->target_task != task) {
-        s_task_pending = true;
-        s_pending_task = task;
-    }
-}
-
-static void view_poll(uint32_t now_ms)
-{
-    if (s_task_pending && BspGimbal_IsSettled(now_ms)) {
-        s_task_pending = false;
-        BspOpenmv_SetTask(s_pending_task);
+    if (BspOpenmv_GetState()->target_task != task) {
+        BspOpenmv_SetTask(task);
     }
 }
 
@@ -182,15 +157,15 @@ static void enter_state(mission_state_t next, uint32_t now_ms)
     case ST_IDLE:
         BspMotor_Stop();
         Motion_ClearActionTimeout();
-        view_request(GIMBAL_POSE_CENTER, OPENMV_TASK_IDLE);
+        view_set(OPENMV_TASK_IDLE);
         Board_LedSetPattern(LED_PAT_SLOW_BLINK);
         Board_KeyResetStartArm();
         s_key_armed = false;
         break;
 
     case ST_TRACK_TO_OBS:
-        BspTof_ResetTrigger();
-        view_request(GIMBAL_POSE_CENTER, OPENMV_TASK_IDLE);
+        BspSonar_ResetTrigger();
+        view_set(OPENMV_TASK_IDLE);
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
         break;
 
@@ -209,7 +184,7 @@ static void enter_state(mission_state_t next, uint32_t now_ms)
         s_fork_waiting = false;
         s_fork_wait_done = false;
         s_fork_view_switched = false;
-        view_request(GIMBAL_POSE_SIGN, OPENMV_TASK_TURN);
+        view_set(OPENMV_TASK_TURN);
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
         break;
 
@@ -218,18 +193,18 @@ static void enter_state(mission_state_t next, uint32_t now_ms)
         s_color_done = false;
         s_corner4_valid = false;
         corner_reset();
-        view_request(GIMBAL_POSE_COLOR, OPENMV_TASK_COLOR);
+        view_set(OPENMV_TASK_COLOR);
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
         break;
 
     case ST_PARK_SEARCH:
         s_park_by_odom = false;
-        view_request(GIMBAL_POSE_PARK, OPENMV_TASK_PARK);
+        view_set(OPENMV_TASK_PARK);
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
         break;
 
     case ST_PARK_REVERSE:
-        view_request(GIMBAL_POSE_PARK, OPENMV_TASK_IDLE);
+        view_set(OPENMV_TASK_IDLE);
         s_park_step = PARK_STEP_EXTRA_FWD;
         Motion_StartDriveDist(CFG_PARK_EXTRA_FWD_MM, CFG_SPEED_PARK_SEARCH_MM_S);
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
@@ -237,14 +212,13 @@ static void enter_state(mission_state_t next, uint32_t now_ms)
 
     case ST_DONE:
         BspMotor_Stop();
-        view_request(GIMBAL_POSE_PARK, OPENMV_TASK_IDLE);
+        view_set(OPENMV_TASK_IDLE);
         Board_LedSetPattern(LED_PAT_DOUBLE_BLINK);
         break;
 
     case ST_FAULT:
     default:
         BspMotor_EmergencyStop();
-        s_task_pending = false;
         BspOpenmv_SetTask(OPENMV_TASK_IDLE);
         Board_LedSetPattern(LED_PAT_FAULT_BLINK);
         s_key_armed = false;
@@ -293,10 +267,10 @@ static const char *check_start_ready(uint32_t now_ms)
         return "WAIT:ENC";
     }
 #endif
-#if (CFG_REQUIRE_TOF_TO_START != 0U) && (CFG_ENABLE_TOF != 0U)
+#if (CFG_REQUIRE_SONAR_TO_START != 0U) && (CFG_ENABLE_SONAR != 0U)
     if (((s_start_stage == START_FULL) || (s_start_stage == START_AVOID)) &&
-        (s_profile != MISSION_PROFILE_PARK_ONLY) && !BspTof_IsHealthy(now_ms)) {
-        return "WAIT:TOF";
+        (s_profile != MISSION_PROFILE_PARK_ONLY) && !BspSonar_IsHealthy(now_ms)) {
+        return "WAIT:SONAR";
     }
 #endif
 #if (CFG_REQUIRE_MV_ONLINE_TO_START != 0U) && (CFG_ENABLE_OPENMV != 0U)
@@ -451,7 +425,7 @@ static void step_park_reverse(uint32_t now_ms)
 
 static bool check_line_lost(void)
 {
-    if (Motion_GetLineLostMm() > CFG_LINE_LOST_MAX_MM) {
+    if ((Motion_GetLineLostMm() > CFG_LINE_LOST_MAX_MM) || (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)) {
         Mission_RequestEmergencyStop("LINE_LOST");
         return true;
     }
@@ -506,9 +480,9 @@ static void step_fork(uint32_t now_ms, float stage_dist, float dt_s)
     if (stage_dist >= (CFG_GATE_FORK_DONE_MM + CFG_GATE_COLOR_ENTER_MM)) {
         enter_state(ST_COLOR_SCAN, now_ms);
     } else if ((stage_dist >= CFG_GATE_FORK_DONE_MM) && !s_fork_view_switched) {
-        /* 出分岔后提前把云台转到侧视，留足稳定时间 */
+        /* 出分岔后停掉转向识别，免得后面的牌子被误认 */
         s_fork_view_switched = true;
-        view_request(GIMBAL_POSE_COLOR, OPENMV_TASK_IDLE);
+        view_set(OPENMV_TASK_IDLE);
     }
 }
 
@@ -518,8 +492,6 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
     const openmv_state_t *mv  = BspOpenmv_GetState();
     float stage_dist = mot->total_dist_mm - s_stage_start_dist_mm;
     board_key_event_t ev = KEY_EVT_NONE;
-
-    view_poll(now_ms);
 
     /* 1. 运动态：驱动板失联、计数跳变、人工按键急停 */
     if ((s_state != ST_IDLE) && (s_state != ST_DONE) && (s_state != ST_FAULT)) {
@@ -565,14 +537,14 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
         bool gate_ok = (s_profile == MISSION_PROFILE_AVOID_ONLY)
                        ? (stage_dist >= 150.0f)
                        : (mot->total_dist_mm >= CFG_GATE_OBS_ENABLE_MM);
-#if (CFG_ENABLE_TOF != 0U)
-        /* 避障窗口内激光失效不能当作前方畅通（文档 2 章） */
-        if (gate_ok && !BspTof_IsHealthy(now_ms)) {
-            Mission_RequestEmergencyStop("TOF_LOST");
+#if (CFG_ENABLE_SONAR != 0U)
+        /* 避障窗口内超声失效不能当作前方畅通（文档 2 章） */
+        if (gate_ok && !BspSonar_IsHealthy(now_ms)) {
+            Mission_RequestEmergencyStop("SONAR_LOST");
             break;
         }
 #endif
-        if (gate_ok && BspTof_IsObstacleDetected(now_ms)) {
+        if (gate_ok && BspSonar_IsObstacleDetected(now_ms)) {
             BspMotor_Stop();
             enter_state(ST_AVOID_OBS, now_ms);
         }
@@ -602,12 +574,12 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
                 /* 4 色全部锁存，立即切 IDLE 防后续误改 */
                 s_color_done = true;
                 s_color_done_mm = mot->total_dist_mm;
-                view_request(GIMBAL_POSE_COLOR, OPENMV_TASK_IDLE);
+                view_set(OPENMV_TASK_IDLE);
             } else if (stage_dist >= CFG_GATE_COLOR_EXIT_MM) {
                 /* 走出色区仍未满 4 色：保留已识别结果，继续去拿入库分 */
                 s_color_done = true;
                 s_color_done_mm = mot->total_dist_mm;
-                view_request(GIMBAL_POSE_COLOR, OPENMV_TASK_IDLE);
+                view_set(OPENMV_TASK_IDLE);
             }
         } else if ((mot->total_dist_mm - s_color_done_mm) >= CFG_GATE_PARK_ENTER_MM) {
             /* 从锁存（或走出色区）的位置起算，而不是从进入色区起算 */

@@ -16,6 +16,7 @@ static uint8_t  s_have_base = 0U;
 /* 速度 PID 内部状态 */
 static float    s_pid_integ[4];
 static float    s_pid_prev_err[4];
+static float    s_pid_prev_tgt[4];      /* 上一周期目标，用来发现正反转切换 */
 static uint8_t  s_raw_pwm_mode = 0U;
 static int16_t  s_raw_pwm_cmd[4];
 static uint8_t  s_driving = 0U;
@@ -285,6 +286,13 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
             continue;
         }
 
+        /* 目标正反向切换（弯里内侧轮常见）时清积分：旧方向攒下的积分会把新方向的输出顶反，PWM 突跳 */
+        if ((tgt > 0.0f) != (s_pid_prev_tgt[i] > 0.0f)) {
+            s_pid_integ[i] = 0.0f;
+            s_pid_prev_err[i] = 0.0f;
+        }
+        s_pid_prev_tgt[i] = tgt;
+
         float err = tgt - s_mot.wheel_spd_mm_s[i];
         s_pid_integ[i] = clampf(s_pid_integ[i] + err * dt_s * CFG_WHEEL_PID_KI * 50.0f,
                                 -1200.0f, 1200.0f);
@@ -295,9 +303,9 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
         float dead = (tgt > 0.0f) ? (float)CFG_WHEEL_PWM_DEADZONE : -(float)CFG_WHEEL_PWM_DEADZONE;
         float u = dead + ff + CFG_WHEEL_PID_KP * err + s_pid_integ[i] + CFG_WHEEL_PID_KD * deriv * 0.02f;
 
-        /* 防止正向目标出现负向反转抖动 */
-        if (tgt > 0.0f && u < 0.0f) { u = 0.0f; }
-        if (tgt < 0.0f && u > 0.0f) { u = 0.0f; }
+        /* 与目标反向的输出只用来制动（内侧轮被拖着走时减速），限在 CFG_WHEEL_BRAKE_PWM 以内，防止反转抖动 */
+        if (tgt > 0.0f && u < -(float)CFG_WHEEL_BRAKE_PWM) { u = -(float)CFG_WHEEL_BRAKE_PWM; }
+        if (tgt < 0.0f && u > (float)CFG_WHEEL_BRAKE_PWM) { u = (float)CFG_WHEEL_BRAKE_PWM; }
 
         pwm_out[i] = clamp_i16((int32_t)lroundf(u), -CFG_WHEEL_PWM_MAX, CFG_WHEEL_PWM_MAX);
     }

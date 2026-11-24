@@ -459,7 +459,7 @@ void BspOled_ShowRaceScreen(const char *stage_name,
                             const char *color_seq,
                             bool color_locked,
                             char turn_dir,
-                            uint16_t tof_mm,
+                            uint16_t sonar_mm,
                             bool enc_ok,
                             bool mv_ok)
 {
@@ -475,12 +475,12 @@ void BspOled_ShowRaceScreen(const char *stage_name,
     BspOled_SetColor(mv_ok ? OLED_C_GREEN : OLED_C_RED);
     BspOled_DrawChar(150U, 3U, mv_ok ? 'M' : 'x', 1U);
 
-    /* 第 2 行：里程(cm) + 转向结果 + 激光距离(mm) */
+    /* 第 2 行：里程(cm) + 转向结果 + 超声距离(mm) */
     BspOled_SetColor(OLED_C_WHITE);
-    BspOled_Printf(2U, 15U, 1U, "D:%4dcm  T:%c  L:%3dmm",
+    BspOled_Printf(2U, 15U, 1U, "D:%4dcm  T:%c  S:%3dmm",
                    (int)(total_dist_mm / 10.0f),
                    (turn_dir != 0) ? turn_dir : '-',
-                   (tof_mm > 999U) ? 999 : (int)tof_mm);
+                   (sonar_mm > 999U) ? 999 : (int)sonar_mm);
 
     /* 分割线 */
     BspOled_SetColor(OLED_C_GRAY);

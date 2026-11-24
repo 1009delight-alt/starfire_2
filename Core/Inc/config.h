@@ -8,9 +8,8 @@
 
 /* ==================== 1. 硬件开关与安全保护 ==================== */
 #define CFG_ENABLE_OLED                 1U  /* SPI2 1.8 寸 ST7735S 彩屏（PB10~PB13、PB15） */
-#define CFG_ENABLE_TOF                  1U  /* PB6/PB7   软件 I2C VL53L0X */
+#define CFG_ENABLE_SONAR                1U  /* PB6 Trig / PB7 Echo(TIM4_CH2) HC-SR04 超声 */
 #define CFG_ENABLE_GRAY                 1U  /* PE2~PE4 + PC0(ADC1_IN10)   */
-#define CFG_ENABLE_GIMBAL               1U  /* PB8/PB9   TIM4 双轴云台    */
 #define CFG_ENABLE_OPENMV               1U  /* PA9/PA10  USART1 <-> OpenMV*/
 #define CFG_ENABLE_DEBUG_UART           0U  /* PC6/PC7   USART6 遥测打印  */
 
@@ -33,10 +32,10 @@
 #define CFG_ENABLE_IWDG                 1U
 #define CFG_IWDG_RELOAD                 300U /* 约 300ms */
 
-/* 发车前置条件（从“避障之前”的赛段起跑时检查激光；需要视觉时检查 OpenMV） */
-#define CFG_REQUIRE_TOF_TO_START        1U
+/* 发车前置条件（从“避障之前”的赛段起跑时检查超声；需要视觉时检查 OpenMV） */
+#define CFG_REQUIRE_SONAR_TO_START      1U
 #define CFG_REQUIRE_MV_ONLINE_TO_START  1U
-#define CFG_TOF_STALE_MS                200U /* 激光超过该时间无新读数视为失效 */
+#define CFG_SONAR_STALE_MS              300U /* 超声超过该时间没收到完整回波视为失效（约 5 个测量周期） */
 #define CFG_ENC_JUMP_COUNTS             4000 /* 相邻两帧累计计数跳变超过该值，视为驱动板复位 */
 
 /* 编码器堵转/冻结检测：某轮目标 >= MIN_TGT 而实测 < MAX_SPD 持续 STALL_MS，报 ENC_STALL 急停。
@@ -78,6 +77,9 @@
 #define CFG_WHEEL_PWM_DEADZONE          350     /* 克服静摩擦的最小起步 PWM（0~3600） */
 #define CFG_WHEEL_PWM_MAX               2400    /* 四轮统一安全 PWM 上限（协议满量程 3600） */
 #define CFG_WHEEL_SPD_MAX_MM_S          650.0f  /* 最大允许目标轮速 (mm/s) */
+/* 目标为正、轮子却被车身拖得比目标快时，允许输出的最大反向（制动）PWM。0 = 旧行为（最低只到 0，只能滑行）。
+ * 2026-11-23 新增：差速转弯时内侧轮被外侧轮拖着走，减不下来，速度差被抹平 */
+#define CFG_WHEEL_BRAKE_PWM             200
 
 /* M4 硬件/负载补偿比例（如实测某轮阻力明显偏大，可微调前馈系数，默认全 1.0） */
 #define CFG_WHEEL_FF_SCALE_M1           1.00f
@@ -95,7 +97,7 @@
 #define CFG_GRAY_SETTLE_US              40U
 /* 默认 8 通道黑白分割阈值（12 位 ADC：0~4095），用 RUN_MODE_DBG_GRAY 标定后回填 */
 /* 2026-11-22 实测（模块 5V 供电，OUT 经 10k/20k 分压到 PC0）：白底约 1590，黑约 136，取中值；赛道布上需复测 */
-#define CFG_GRAY_TH_DEFAULT             { 860U, 860U, 860U, 860U, 860U, 860U, 860U, 860U }
+#define CFG_GRAY_TH_DEFAULT             { 1000U, 1000U, 1000U, 1000U, 1000U, 1000U, 1000U, 1000U }
 /* 坏通道屏蔽：bit i = 屏上从左数第 i 个方块（从 0 数，已含装反翻转）。被屏蔽的通道不参与判线，
  * 两侧好通道都压线时补为压线（防止一条线被劈成两段误判分岔），否则当白。0x00 = 不屏蔽。
  * 2026-11-22：模块 X7 撞坏，屏蔽；修好后改回 0x00。
@@ -105,10 +107,15 @@
 #define CFG_GRAY_WEIGHTS                { -3.5f, -2.5f, -1.5f, -0.5f, 0.5f, 1.5f, 2.5f, 3.5f }
 
 /* ==================== 4. 循迹 PID 与各赛段目标速度 (mm/s) ==================== */
-#define CFG_LINE_PID_KP                 68.0f   /* 线偏误差 -> 左右差速 (mm/s) */
+#define CFG_LINE_PID_KP                 100.0f   /* 线偏误差 -> 左右差速 (mm/s) */
 #define CFG_LINE_PID_KI                 0.0f
-#define CFG_LINE_PID_KD                 28.0f
-#define CFG_LINE_DIFF_MAX_MM_S          260.0f  /* 差速限幅 (mm/s) */
+#define CFG_LINE_PID_KD                 100.0f
+/* 微分一阶低通系数（2026-11-23 新增）：8 路误差一格 0.5 地跳，直接差分会出尖峰让直道抖。
+ * 1 = 不滤波；越小越平滑但越滞后，建议 0.25~0.5。KD 乘的是“每 20 ms 的误差变化”(低通后) */
+#define CFG_LINE_D_LPF_ALPHA            0.35f
+/* 2026-11-23 实车：架空时差速明显，落地后基本不回正（四轮差速侧滑大），KP=200 时误差 1.3 就顶到旧限幅 260。
+ * 放大到 450：调试基速 140 时内侧轮最多反转到 -310，巡航 280 时到 -170 */
+#define CFG_LINE_DIFF_MAX_MM_S          450.0f  /* 差速限幅 (mm/s) */
 
 #define CFG_SPEED_CRUISE_MM_S           280.0f  /* 常规直道/前两弯巡航速度 */
 #define CFG_SPEED_FORK_MM_S             190.0f  /* 路牌识别与分岔口速度 */
@@ -125,17 +132,36 @@
 #define CFG_TURN_TOLERANCE_DEG          2.0f    /* 原地转角到位容差 (deg) */
 #define CFG_DIST_TOLERANCE_MM           8.0f    /* 定距直行到位容差 (mm) */
 
-/* 丢线保护：8 路全白后按上次方向以 0.6 倍基速找线，累计超过该距离即停车报 LINE_LOST */
-#define CFG_LINE_LOST_SPEED_SCALE       0.6f
-#define CFG_LINE_LOST_MAX_MM            150.0f
+/* 丢线保护：8 路全白后按上次方向以 CFG_LINE_LOST_SPEED_SCALE 倍基速找线，累计超过该距离即停车报 LINE_LOST */
+/* 2026-11-23：0.6 倍基速加差速限幅时，丢线后画大弧，直角弯转不回来。改为接近原地转：
+ * 前进很慢、差速给足。调试基速 140 时约前进 35 mm/s，左右轮约 −265 / +335 */
+#define CFG_LINE_LOST_SPEED_SCALE       0.25f
+#define CFG_LINE_LOST_MAX_MM            250.0f
+/* 丢线后累计转过该角度仍没找到线也报 LINE_LOST。2026-11-23 新增：找线改成近原地转后，巡航 280 时
+ * 前进只有约 70 mm/s，只按 250 mm 判要转约 440° 才停。直角弯约需 90°，留余量取 180，估值 */
+#define CFG_LINE_LOST_MAX_DEG           180.0f
+/* 丢线找线时的差速上限 (mm/s)，比 CFG_LINE_DIFF_MAX_MM_S 小，防止直角弯猛转冲过头。2026-11-23 新增，估值 */
+/* 220 时直角弯转不过来（2026-11-23 实车），改 300。冲过头就往下调，转不过就往上调 */
+#define CFG_LINE_LOST_DIFF_MM_S         300.0f
+/* 偏差降速：基速 × (1 − k·|err|)，不低于 MIN 倍。|err|=3 时约 0.64 倍。2026-11-23 由台阶改为连续，估值 */
+#define CFG_LINE_SLOW_PER_ERR           0.12f
+#define CFG_LINE_SLOW_MIN_SCALE         0.45f
 
 /* 弯道识别：最近 CFG_CORNER_WINDOW_MM 行驶内航向变化 >= CFG_CORNER_YAW_DEG 记为经过一个弯 */
 #define CFG_CORNER_WINDOW_MM            400.0f
 #define CFG_CORNER_YAW_DEG              60.0f
 
-/* ==================== 5. 前向激光避障参数 (VL53L0X) ==================== */
+/* ==================== 5. 前向超声避障参数 (HC-SR04) ==================== */
+/* 测量周期：HC-SR04 手册建议 >= 60 ms，防止上一次的余波被当成本次回波 */
+#define CFG_SONAR_PERIOD_MS             60U
+/* 回波宽度 (us) -> 距离 (mm)：声速 / 2。20°C 约 0.1715；现场温差大时按 0.1657+0.0003×温度(°C) 改 */
+#define CFG_SONAR_MM_PER_US             0.1715f
+/* 量程上限 (mm)：超过记为“前方空旷”（2000）。HC-SR04 标称 4 m，远处读数波动大，避障用不到 */
+#define CFG_SONAR_MAX_MM                1500U
 #define CFG_OBS_TRIG_DIST_MM            240U    /* 障碍物触发距离 (mm)，需在障碍前 50cm 区域内开始避让 */
-#define CFG_OBS_CONFIRM_FRAMES          3U      /* 连续几帧 <= 触发距离才启动避障 */
+/* 3 点中值后连续几次 <= 触发距离才启动避障。超声 60 ms 一次，比原激光 33 ms 慢：
+ * 中值要 2 次近读数 + 确认 2 次 ≈ 3 次测量 ≈ 180 ms，巡航 280 mm/s 时多走约 50 mm，与原激光 3 帧相当 */
+#define CFG_OBS_CONFIRM_FRAMES          2U
 /* 绕障侧向：+1 = 向左绕（下直道为赛道外侧），-1 = 向右绕（下直道为赛道内侧，推荐避免出布边） */
 #define CFG_AVOID_TURN_DIR              (-1)
 /* 4 步绕障几何参数（需确保全程在障碍物前后左右各 500mm 区域内且不碰 100mm 方块） */
@@ -147,32 +173,13 @@
 #define CFG_REJOIN_CONFIRM              4U      /* 连续几帧看到线且 |err| <= 阈值才算回到原线 */
 #define CFG_REJOIN_MAX_ERR              1.5f
 
-/* ==================== 6. 双轴云台脉宽标定与软限幅 (us) ==================== */
-/* 50Hz 标准舵机脉宽 500~2500us，中位约 1500us。
- * 注意：俯仰舵机曾撞歪（后倾行程约 80°），务必先在 RUN_MODE_DBG_GIMBAL 从中位小幅实测！ */
-#define CFG_GIMBAL_PAN_MIN_US           750U
-#define CFG_GIMBAL_PAN_MAX_US           2250U
-#define CFG_GIMBAL_TILT_MIN_US          900U
-#define CFG_GIMBAL_TILT_MAX_US          2100U
-#define CFG_GIMBAL_STEP_US_PER_20MS     30U     /* 平滑过渡速率（越大越快，越小电流冲击越小） */
-#define CFG_GIMBAL_SETTLE_MS            300U    /* 脉宽到达目标后再等多久才算画面稳定，需实测 */
-
-/* 四个赛段预设云台姿态 (水平 PB8 us, 俯仰 PB9 us) —— 实测后回填 */
-#define CFG_GIMBAL_CENTER_PAN_US        1500U   /* 正位：水平朝前 */
-#define CFG_GIMBAL_CENTER_TILT_US       1450U   /* 正位：对应实测 -5° 微偏 */
-
-#define CFG_GIMBAL_SIGN_PAN_US          1350U   /* 路牌视角：朝右前看分岔牌 */
-#define CFG_GIMBAL_SIGN_TILT_US         1450U
-
-#define CFG_GIMBAL_COLOR_PAN_US         1050U   /* 四色视角：朝正右看 25cm 处 4 个色块 */
-#define CFG_GIMBAL_COLOR_TILT_US        1550U
-
-#define CFG_GIMBAL_PARK_PAN_US          1050U   /* 车库视角：朝正右看 P 牌 */
-#define CFG_GIMBAL_PARK_TILT_US         1500U
+/* ==================== 6. OpenMV 安装 ==================== */
+/* 2026-11-23 起取消云台，OpenMV 固定装在车右前方，同一视角看转向牌、四色和 P 牌。
+ * 视觉任务切换后立即下发，不再等舵机稳定。相机脚本的 ROI 和 P 牌对齐窗 (CFG_PARK_ALIGN_CX_*) 要按新视角重标 */
 
 /* ==================== 7. 赛段里程门控窗口 (mm) ==================== */
 /* 赛道总尺寸约 4500 x 3000 mm，顺时针运行；门控用于防止非对应赛段误触发 */
-#define CFG_GATE_OBS_ENABLE_MM          3200.0f /* 过前两弯进入下直道后允许激光触发避障 */
+#define CFG_GATE_OBS_ENABLE_MM          3200.0f /* 过前两弯进入下直道后允许超声触发避障 */
 #define CFG_GATE_FORK_BIAS_START_MM     350.0f  /* 避障回线后再走多少 mm 开启分岔偏置寻线 */
 #define CFG_GATE_FORK_DONE_MM           1700.0f /* 避障回线后走过此距离认为已出分岔菱形区 */
 #define CFG_GATE_COLOR_ENTER_MM         1200.0f /* 出分岔后过第 3 弯进入左直道色块区里程 */

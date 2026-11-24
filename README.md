@@ -6,10 +6,10 @@
 
 1. 打开工作区后，等待右下角 Arm Tools 环境激活完成；如 VS Code 提示工作区信任，请按自己的判断选择。
 2. 按 `Ctrl+Shift+B` 执行 `Build Debug`。也可以在左侧 CMSIS 视图使用 Build。
-3. 接好 ST-Link 下载器的 SWD 接口，在“运行和调试”中选择 ST-Link 的 launch 配置，按 `F5` 下载并停在 `main`，再按 `F5` 继续运行。每次修改程序后先重新编译。
+3. 接好 PWLink2 下载器（CMSIS-DAP）的 SWD 接口，在“运行和调试”中选择 `PWLink2(CMSIS-DAP)@pyOCD (launch)`，按 `F5` 下载并停在 `main`，再按 `F5` 继续运行。每次修改程序后先重新编译。
 4. LED 每 500 ms 翻转一次；按住 PA0 用户按键时常亮。调试时可观察 `heartbeat_count`、`SystemCoreClock`、`uwTick`。
 
-默认选择 `ST-Link@pyOCD`，SWD 频率为 1 MHz。Keil Studio 根据 `SkyStar.csolution.yml` 自动生成 ST-Link 的下载和调试配置。
+默认选择 `CMSIS-DAP@pyOCD`（PWLink2），SWD 频率为 1 MHz，pyOCD 用 `--probe cmsisdap:` 选择探针。Keil Studio 根据 `SkyStar.csolution.yml` 自动生成下载和调试配置。接上后可执行 `CMSIS TargetInfo` 任务或 `pyocd list` 确认能识别到 PWLink2。
 
 ## 板卡参数与连接
 
@@ -25,7 +25,7 @@
 | 用户按键 | PA0，按下为高电平，配置下拉 |
 | 下载接口 | SWDIO → PA13，SWCLK → PA14，GND 共地；可连接 NRST 以便复位 |
 
-开发板正常供电，ST-Link 如有 VTref 接口应连接目标板 3.3 V 作为电平参考。具体供电输出脚的接法以下载器说明为准。正常从 Flash 启动时不要按住 BOOT 按键。核心板 Type-C 可供电及 USB 通信，下载调试使用外接 ST-Link。
+开发板正常供电，PWLink2 的 VREF/VCC 检测脚应连接目标板 3.3 V 作为电平参考。具体供电输出脚的接法以下载器说明为准。正常从 Flash 启动时不要按住 BOOT 按键。核心板 Type-C 可供电及 USB 通信，下载调试使用外接 PWLink2。
 
 本工程使用 STM32 HAL，未配置串口、USB、RTOS 或小车外设。外设可在 `Core/Src/board.c` 初始化，在 `Core/Inc/stm32f4xx_hal_conf.h` 启用 HAL 模块，并将对应驱动源文件加入 `SkyStar.cproject.yml`。完整 HAL 驱动代码已放入 `Drivers`，无需再次下载。
 
