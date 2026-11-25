@@ -14,6 +14,8 @@ float Motion_GetLineLostDeg(void);     /* 本次连续丢线已转过的角度�
 
 /* 循迹 PID 单步执行（每 20ms 调用一次） */
 void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, float dt_s);
+/* 循迹 P 项（变增益）：KP × err × (CENTER + EDGE × |err|)，回放用它核对 */
+float Motion_LinePTerm(float err);
 
 /* 编码器闭环定距直行（dist_mm > 0 前进, < 0 倒车） */
 void Motion_StartDriveDist(float dist_mm, float speed_mm_s);

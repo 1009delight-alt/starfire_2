@@ -10,11 +10,15 @@ static float s_line_integ = 0.0f;
 static float s_line_prev_err = 0.0f;
 static float s_line_d_filt = 0.0f;      /* 低通后的微分项（单位：每 20 ms 的误差变化） */
 static bool  s_line_have_prev = false;  /* 复位后第一拍没有上一拍误差，不算微分，免得起步突跳 */
+static bool  s_line_prev_found = true;  /* 上一拍灰度是否有线，用来发现“找回线”那一拍 */
+static bool  s_line_prev_cross = false; /* 上一拍是否在路口保持中，用来发现保持结束那一拍 */
 static bool  s_line_lost = false;
 static float s_lost_start_mm = 0.0f;    /* 本次丢线开始时的总里程 */
 static float s_lost_mm = 0.0f;          /* 本次连续丢线已行驶的距离 */
 static float s_lost_start_yaw = 0.0f;   /* 本次丢线开始时的累计航向 */
 static float s_lost_deg = 0.0f;         /* 本次连续丢线已转过的角度 */
+static bool  s_in_cross = false;        /* 灰度正处在路口保持中 */
+static float s_cross_start_mm = 0.0f;   /* 本次路口保持开始时的总里程 */
 
 /* 定距直行 / 原地转向目标状态 */
 static float s_tgt_dist_mm = 0.0f;
@@ -75,9 +79,12 @@ void Motion_ResetLinePid(void)
     s_line_prev_err = 0.0f;
     s_line_d_filt = 0.0f;
     s_line_have_prev = false;
+    s_line_prev_found = true;
+    s_line_prev_cross = false;
     s_line_lost = false;
     s_lost_mm = 0.0f;
     s_lost_deg = 0.0f;
+    s_in_cross = false;
 }
 
 float Motion_GetLineLostMm(void)
@@ -88,6 +95,11 @@ float Motion_GetLineLostMm(void)
 float Motion_GetLineLostDeg(void)
 {
     return s_lost_deg;
+}
+
+float Motion_LinePTerm(float err)
+{
+    return CFG_LINE_PID_KP * err * (CFG_LINE_KP_CENTER_SCALE + CFG_LINE_KP_EDGE_GAIN * fabsf(err));
 }
 
 void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, float dt_s)
@@ -105,12 +117,19 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
     s_line_integ = clampf(s_line_integ + err * dt_s, -2.0f, 2.0f);
     /* 8 路灰度的误差是一格 0.5 地跳，直接差分会把每次跳格放大成一个尖峰（直道高频抖），
      * 所以微分先做一阶低通。单位折算成“每 20 ms 的误差变化”，KD 的含义与控制周期无关 */
-    float d_raw = s_line_have_prev ? ((err - s_line_prev_err) / dt_s * 0.02f) : 0.0f;
+    /* 误差来源切换的那一拍不算微分：丢线后找回（找线误差 ±3.8 → 实测）、路口保持结束（保持值 → 实测）
+     * 时误差是换了来源而不是车在快速偏离，差分会冒出一个假尖峰 */
+    const bool src_switch = (g->line_found && !s_line_prev_found) ||
+                            (s_line_prev_cross && (g->cross_frames == 0U));
+    s_line_prev_found = g->line_found;
+    s_line_prev_cross = (g->cross_frames > 0U);
+    float d_raw = (s_line_have_prev && !src_switch) ? ((err - s_line_prev_err) / dt_s * 0.02f) : 0.0f;
     s_line_have_prev = true;
     s_line_prev_err = err;
     s_line_d_filt += CFG_LINE_D_LPF_ALPHA * (d_raw - s_line_d_filt);
 
-    float diff = CFG_LINE_PID_KP * err +
+    /* P 项中间软、两边硬：直道小偏差不来回摆，弯里大偏差给足差速（见 config.h） */
+    float diff = Motion_LinePTerm(err) +
                  CFG_LINE_PID_KI * s_line_integ +
                  CFG_LINE_PID_KD * s_line_d_filt;
     diff = clampf(diff, -CFG_LINE_DIFF_MAX_MM_S, CFG_LINE_DIFF_MAX_MM_S);
@@ -123,7 +142,19 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
 
     /* 丢线：按上次方向低速找线，并累计丢线行驶距离供状态机判 LINE_LOST */
     const motor_state_t *m = BspMotor_GetState();
-    if (!g->line_found) {
+    /* 路口保持封顶：压黑够多时灰度保持上一拍误差直行，真横线只压几十毫米。连续“路口”超过
+     * CFG_LINE_CROSS_MAX_MM 说明不是路口（阈值设错整排判黑、开进大片黑区），按丢线处理，
+     * 好让 LINE_LOST 能停车；否则 line_found 一直为真，车会一直直行不停 */
+    if (g->cross_frames > 0U) {
+        if (!s_in_cross) {
+            s_in_cross = true;
+            s_cross_start_mm = m->total_dist_mm;
+        }
+    } else {
+        s_in_cross = false;
+    }
+    const bool flooded = s_in_cross && (fabsf(m->total_dist_mm - s_cross_start_mm) > CFG_LINE_CROSS_MAX_MM);
+    if (!g->line_found || flooded) {
         if (!s_line_lost) {
             s_line_lost = true;
             s_lost_start_mm = m->total_dist_mm;

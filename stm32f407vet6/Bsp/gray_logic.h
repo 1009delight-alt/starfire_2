@@ -11,8 +11,12 @@
  *   reverse      1 = 硬件通道 0 在最右（装反），计算前翻转成“左 0 右 7”
  *   dead_mask    坏通道位图（逻辑顺序，bit i = 屏上从左数第 i 个方块，从 0 数）：读数忽略；
  *                两侧好通道都压线时补为压线，否则当白
- * 结果写入 st：raw/bits/black_count/line_found/is_split/error/last_valid_err。
+ * 结果写入 st：raw/bits/black_count/line_found/is_split/is_cross/error/last_valid_err。
  * st->thresh 按“左 0 右 7”的逻辑顺序给出。 */
+/* 清掉跨帧状态：live_bits、确认计数、line_found、error、last_valid_err、is_cross/is_split；
+ * thresh 和 raw 保留 */
+void GrayLogic_ResetTrack(gray_state_t *st);
+
 void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mode_t bias,
                        bool black_is_low, bool reverse, uint8_t dead_mask);
 

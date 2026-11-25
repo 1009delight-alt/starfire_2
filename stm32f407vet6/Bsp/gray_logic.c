@@ -3,10 +3,24 @@
 
 static const float k_weights[8] = CFG_GRAY_WEIGHTS;
 
-/* 偏左/偏右模式只取最左/最右的连续黑线段；居中模式取全部黑点的加权平均 */
-static float compute_cluster_error(uint8_t bits, gray_bias_mode_t mode, float fallback)
+/* 偏左/偏右模式只取最左/最右的连续黑线段。居中模式只有一段时取全部黑点的加权平均；
+ * 有两段以上（路口横线的残段、方框边线）时取离上一拍误差最近的一段，不被支线拉走 */
+static float compute_cluster_error(uint8_t bits, gray_bias_mode_t mode, float fallback, uint8_t clusters)
 {
     int start = -1, end = -1;
+
+    if ((mode == GRAY_BIAS_CENTER) && (clusters >= 2U)) {
+        float best_d = 1.0e9f;
+        int i = 0;
+        while (i < 8) {
+            if ((bits & (1U << i)) == 0U) { ++i; continue; }
+            int s0 = i;
+            while ((i < 8) && ((bits & (1U << i)) != 0U)) { ++i; }
+            float c = 0.5f * (k_weights[s0] + k_weights[i - 1]);
+            float d = (c > fallback) ? (c - fallback) : (fallback - c);
+            if (d < best_d) { best_d = d; start = s0; end = i - 1; }
+        }
+    }
 
     if (mode == GRAY_BIAS_LEFT) {
         for (int i = 0; i < 8; ++i) {
@@ -49,11 +63,26 @@ static float compute_cluster_error(uint8_t bits, gray_bias_mode_t mode, float fa
     return (cnt > 0) ? (sum / (float)cnt) : fallback;
 }
 
+void GrayLogic_ResetTrack(gray_state_t *st)
+{
+    st->live_bits = 0U;
+    st->bits = 0U;
+    st->black_count = 0U;
+    st->white_frames = 0U;
+    st->cross_frames = 0U;
+    st->line_found = false;
+    st->is_split = false;
+    st->is_cross = false;
+    st->error = 0.0f;
+    st->last_valid_err = 0.0f;
+}
+
 void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mode_t bias,
                        bool black_is_low, bool reverse, uint8_t dead_mask)
 {
     uint8_t bits = 0U;
     uint8_t black_cnt = 0U;
+    const uint8_t prev_live = st->live_bits;
 
     for (uint8_t hw = 0U; hw < 8U; ++hw) {
         uint8_t idx = reverse ? (uint8_t)(7U - hw) : hw;
@@ -62,7 +91,12 @@ void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mod
         if ((dead_mask & (1U << idx)) != 0U) {
             continue;   /* 坏通道读数不可信，先当白，下面再按两侧补 */
         }
-        bool is_black = black_is_low ? (val < st->thresh[idx]) : (val > st->thresh[idx]);
+        /* 回差：上一帧是黑，要越过“阈值 + 回差”（往白的方向）才变白；上一帧是白，要越过
+         * “阈值 − 回差”（往黑的方向）才变黑。探头在线边缘时不会每帧黑白来回翻 */
+        bool was_black = (prev_live & (1U << idx)) != 0U;
+        int32_t band = was_black ? (int32_t)CFG_GRAY_HYST_ADC : -(int32_t)CFG_GRAY_HYST_ADC;
+        int32_t th = (int32_t)st->thresh[idx];
+        bool is_black = black_is_low ? ((int32_t)val < th + band) : ((int32_t)val > th - band);
         if (is_black) {
             bits |= (uint8_t)(1U << idx);
             black_cnt++;
@@ -72,6 +106,7 @@ void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mod
     /* 坏通道两侧的好通道都压线时补为压线，避免一条线被坏通道劈成两段误判分岔。
      * 两端通道只有一侧邻居，不外推，保持白 */
     const uint8_t live_bits = bits;
+    st->live_bits = live_bits;   /* 下一帧按它做回差（不含坏通道补线） */
     for (uint8_t i = 1U; i < 7U; ++i) {
         if (((dead_mask & (1U << i)) != 0U) &&
             ((live_bits & (1U << (i - 1U))) != 0U) && ((live_bits & (1U << (i + 1U))) != 0U)) {
@@ -93,20 +128,42 @@ void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mod
 
     st->bits = bits;
     st->black_count = black_cnt;
-    st->line_found = (black_cnt > 0U);
     st->is_split = (clusters >= 2U);
+    /* 路口：赛道上的路口一律直行（车库等方框的边线横穿主线，成十字或 T 字）。横线压住大半排探头时
+     * 加权平均会被一侧支线拉偏，所以压黑探头数够多且连成一段时判为路口：误差保持上一拍、
+     * 不更新丢线方向记忆，直行压过去。分岔口是两段分开的线，不算路口，偏置选线照常。
+     * 连续 CFG_GRAY_CONFIRM_FRAMES 帧才置 is_cross；还没确认的那一帧误差也先保持（保持一帧无害，
+     * 被支线拉一帧反而会拐） */
+    const bool cross_cand = (black_cnt >= CFG_GRAY_CROSS_MIN_BLACK) && (clusters == 1U);
+    st->cross_frames = cross_cand ? (uint8_t)((st->cross_frames < 255U) ? (st->cross_frames + 1U) : 255U) : 0U;
+    st->white_frames = (black_cnt == 0U) ? (uint8_t)((st->white_frames < 255U) ? (st->white_frames + 1U) : 255U) : 0U;
+    st->is_cross = cross_cand && (st->cross_frames >= CFG_GRAY_CONFIRM_FRAMES);
 
-    if (st->line_found) {
-        st->error = compute_cluster_error(bits, bias, st->last_valid_err);
+    /* 丢线确认：有线时立刻算找到；全白要连续 CFG_GRAY_CONFIRM_FRAMES 帧才算丢线，
+     * 不够帧数时保持上一帧的判断（上电后从没见过线时仍是“没找到”） */
+    if (black_cnt > 0U) {
+        st->line_found = true;
+    } else if (st->white_frames >= CFG_GRAY_CONFIRM_FRAMES) {
+        st->line_found = false;
+    }
+
+    if (cross_cand) {
+        st->error = st->last_valid_err;
+    } else if (black_cnt > 0U) {
+        st->error = compute_cluster_error(bits, bias, st->last_valid_err, clusters);
         st->last_valid_err = st->error;
+    } else if (st->line_found) {
+        /* 全白但还没确认丢线：误差保持，不急着打满找线 */
+        st->error = st->last_valid_err;
     } else {
-        /* 丢线时沿上次偏离方向加大纠偏找线 */
+        /* 丢线时沿上次偏离方向加大纠偏找线。不一步跳到 ±3.8（线从中间消失时会猛转、D 项出尖峰），
+         * 每帧按一阶低通往目标靠：err += k·(目标 − err)，起点就是确认帧保持下来的上一拍误差 */
+        float target = 0.0f;
         if (st->last_valid_err < -0.2f) {
-            st->error = -3.8f;
+            target = -3.8f;
         } else if (st->last_valid_err > 0.2f) {
-            st->error = 3.8f;
-        } else {
-            st->error = 0.0f;
+            target = 3.8f;
         }
+        st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);
     }
 }

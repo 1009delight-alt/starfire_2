@@ -17,6 +17,7 @@ static uint8_t  s_have_base = 0U;
 static float    s_pid_integ[4];
 static float    s_pid_prev_err[4];
 static float    s_pid_prev_tgt[4];      /* 上一周期目标，用来发现正反转切换 */
+static float    s_cmd_spd[4];           /* 限加速度后实际送进轮速环的目标 (mm/s)，停车时清零 */
 static uint8_t  s_raw_pwm_mode = 0U;
 static int16_t  s_raw_pwm_cmd[4];
 static uint8_t  s_driving = 0U;
@@ -145,6 +146,7 @@ void BspMotor_Init(void)
     memset(&s_mot, 0, sizeof(s_mot));
     memset(s_pid_integ, 0, sizeof(s_pid_integ));
     memset(s_pid_prev_err, 0, sizeof(s_pid_prev_err));
+    memset(s_cmd_spd, 0, sizeof(s_cmd_spd));
     s_have_base = 0U;
     s_raw_pwm_mode = 0U;
     s_driving = 0U;
@@ -267,18 +269,24 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
         return;
     }
 
-    /* 4. 闭环速度输出 */
+    /* 4. 闭环速度输出。目标速度按加速度上限逐周期逼近 target_spd_mm_s：上层一步给到位（起步、换赛段、
+     * 找线降速、定距定角开始）时 PWM 不跟着突跳。急停和 BspMotor_Stop 不经过这里，立即生效 */
+    const float dv_max = CFG_WHEEL_ACC_MAX_MM_S2 * dt_s;
+    for (int i = 0; i < 4; ++i) {
+        float tgt = clampf(s_mot.target_spd_mm_s[i], -CFG_WHEEL_SPD_MAX_MM_S, CFG_WHEEL_SPD_MAX_MM_S);
+        s_cmd_spd[i] += clampf(tgt - s_cmd_spd[i], -dv_max, dv_max);
+    }
 #if (CFG_MOTOR_CTRL_MODE == MOTOR_MODE_DRIVER_SPD)
     int16_t sp[4];
     for (int i = 0; i < 4; ++i) {
-        float clamped = clampf(s_mot.target_spd_mm_s[i], -CFG_WHEEL_SPD_MAX_MM_S, CFG_WHEEL_SPD_MAX_MM_S);
+        float clamped = s_cmd_spd[i];
         sp[i] = clamp_i16((int32_t)lroundf(clamped), -1000, 1000);
     }
     send_spd_frame(sp[0], sp[1], sp[2], sp[3]);
 #else
     int16_t pwm_out[4];
     for (int i = 0; i < 4; ++i) {
-        float tgt = clampf(s_mot.target_spd_mm_s[i], -CFG_WHEEL_SPD_MAX_MM_S, CFG_WHEEL_SPD_MAX_MM_S);
+        float tgt = s_cmd_spd[i];
         if (fabsf(tgt) < 1.0f) {
             s_pid_integ[i] = 0.0f;
             s_pid_prev_err[i] = 0.0f;
@@ -300,7 +308,9 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
         s_pid_prev_err[i] = err;
 
         float ff = tgt * CFG_WHEEL_PID_FF * k_ff_scale[i];
-        float dead = (tgt > 0.0f) ? (float)CFG_WHEEL_PWM_DEADZONE : -(float)CFG_WHEEL_PWM_DEADZONE;
+        /* 起步死区补偿在 ±CFG_WHEEL_DEAD_RAMP_MM_S 内按比例给：原来过零就从 +350 翻到 −350，
+         * 弯里内侧轮目标在 0 附近来回时 PWM 一跳约 700 */
+        float dead = (float)CFG_WHEEL_PWM_DEADZONE * clampf(tgt / CFG_WHEEL_DEAD_RAMP_MM_S, -1.0f, 1.0f);
         float u = dead + ff + CFG_WHEEL_PID_KP * err + s_pid_integ[i] + CFG_WHEEL_PID_KD * deriv * 0.02f;
 
         /* 与目标反向的输出只用来制动（内侧轮被拖着走时减速），限在 CFG_WHEEL_BRAKE_PWM 以内，防止反转抖动 */
@@ -353,6 +363,7 @@ void BspMotor_Stop(void)
     s_raw_pwm_mode = 0U;
     for (int i = 0; i < 4; ++i) {
         s_mot.target_spd_mm_s[i] = 0.0f;
+        s_cmd_spd[i] = 0.0f;
         s_pid_integ[i] = 0.0f;
         s_pid_prev_err[i] = 0.0f;
         s_raw_pwm_cmd[i] = 0;

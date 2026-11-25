@@ -121,9 +121,11 @@ void BspGray_Sample(gray_bias_mode_t m)
     }
     g_gray.line_found = g_line;
     g_gray.black_count = g_line ? 2U : 0U;
+    g_gray.is_cross = false;
     g_gray.error = 0.0f;
 }
 const gray_state_t *BspGray_GetState(void) { return &g_gray; }
+void BspGray_ResetTrack(void) { GrayLogic_ResetTrack(&g_gray); }
 void BspGray_CalibStart(void) { }
 void BspGray_CalibFeed(void) { }
 void BspGray_CalibFinishAndApply(void) { }
@@ -750,13 +752,13 @@ static void case_line_deriv(void)
     sim_reset_world();
     Motion_ResetLinePid();
     float d0 = line_step_diff("00001100");                /* 误差 +1.0 */
-    float p0 = CFG_LINE_PID_KP * BspGray_GetState()->error;
+    float p0 = Motion_LinePTerm(BspGray_GetState()->error);
     check(fabsf(d0 - p0) < 1.0f, "复位后第一拍只有 P 项（差速 %.1f，P %.1f）", d0, p0);
 
     float worst = 0.0f;
     for (int i = 0; i < 40; ++i) {                        /* 0 与 +0.5 每拍交替 */
         float d = line_step_diff((i & 1) ? "00011000" : "00001000");
-        float dterm = fabsf(d - CFG_LINE_PID_KP * BspGray_GetState()->error);
+        float dterm = fabsf(d - Motion_LinePTerm(BspGray_GetState()->error));
         if ((i >= 20) && (dterm > worst)) { worst = dterm; }
     }
     float raw = CFG_LINE_PID_KD * 0.5f;
@@ -794,7 +796,8 @@ static void case_corner(void)
     Motion_ResetLinePid();
     (void)line_step_diff("10000000");                     /* 线在最左，记下方向 */
     float lost = 0.0f;
-    for (int i = 0; i < 5; ++i) { lost = line_step_diff("00000000"); }
+    /* 丢线误差按一阶低通逼近 ±3.8，多走几帧让它到边界附近，才能看出差速限幅 */
+    for (int i = 0; i < 40; ++i) { lost = line_step_diff("00000000"); }
     check(fabsf(lost) <= CFG_LINE_LOST_DIFF_MM_S + 0.5f && lost < 0.0f,
           "丢线找线差速 %.0f，方向向左且不超过 %.0f", lost, CFG_LINE_LOST_DIFF_MM_S);
 
@@ -818,9 +821,12 @@ static void case_corner(void)
     BspMotor_SetDiffSpeed(300.0f, 300.0f);
     run_ms(1500);
     BspMotor_SetDiffSpeed(-30.0f, 300.0f);
+    /* 目标按加速度上限从 300 降到 −30，约 (330/40) 拍后才过零；过零那一拍起输出就该是反向 */
+    const int flip_steps = (int)ceilf(300.0f / (CFG_WHEEL_ACC_MAX_MM_S2 * 0.02f));
     run_to_before_step();
-    run_ms(1);
-    check(g_pwm[0] < 0, "目标转反向后的第一拍左轮 PWM 为反向（%d）", g_pwm[0]);
+    run_ms(1);                                            /* 第 1 拍 */
+    for (int k = 1; k < flip_steps; ++k) { run_ms(20); }  /* 第 flip_steps 拍：目标刚过零 */
+    check(g_pwm[0] < 0, "目标过零后的第一拍左轮 PWM 为反向（%d）", g_pwm[0]);
     g_load = 1.0f;
     BspMotor_Stop();
     run_ms(300);
@@ -920,6 +926,273 @@ static void case_lost_spin(void)
     check(moved < CFG_LINE_LOST_MAX_MM, "是转角先到限（丢线后前进 %.0f mm）", moved);
 }
 
+/* 17. 路口一律直行：横线压满大半排时误差保持上一拍；横线残段与主线分成两段时跟主线；分岔不算路口 */
+static void case_cross(void)
+{
+    printf("\n== 17 路口直行\n");
+    static const uint16_t th[8] = CFG_GRAY_TH_DEFAULT;
+    for (int rev = 0; rev <= 1; ++rev) {
+        gray_state_t st;
+        uint16_t raw[8];
+        memset(&st, 0, sizeof st);
+        memcpy(st.thresh, th, sizeof th);
+
+        gray_pattern("00011100", true, rev != 0, raw);            /* 主线略偏右，误差 +0.5 */
+        GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, rev != 0, 0U);
+        float e0 = st.error;
+        check(!st.is_cross && fabsf(e0 - 0.5f) < 0.01f, "装反=%d：正常压线不判路口（误差 %.2f）", rev, e0);
+
+        gray_pattern("11111100", true, rev != 0, raw);            /* T 字：支线从左边接进来 */
+        GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, rev != 0, 0U);
+        check(fabsf(st.error - e0) < 0.01f, "装反=%d：左侧 T 字第一帧（未确认）误差已保持 %.2f（得 %.2f）",
+              rev, e0, st.error);
+        for (unsigned k = 1U; k < CFG_GRAY_CONFIRM_FRAMES; ++k) {
+            check(!st.is_cross, "装反=%d：T 字第 %u 帧还不置路口标志", rev, k);
+            GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, rev != 0, 0U);
+        }
+        check(st.is_cross && fabsf(st.error - e0) < 0.01f, "装反=%d：左侧 T 字连续 %u 帧判路口，误差保持 %.2f（得 %.2f）",
+              rev, (unsigned)CFG_GRAY_CONFIRM_FRAMES, e0, st.error);
+        gray_pattern("11111111", true, rev != 0, raw);            /* 十字：整排压黑 */
+        GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, rev != 0, 0U);
+        check(st.is_cross && fabsf(st.error - e0) < 0.01f && fabsf(st.last_valid_err - e0) < 0.01f,
+              "装反=%d：十字判路口，误差和方向记忆都不变（%.2f / %.2f）", rev, st.error, st.last_valid_err);
+
+        gray_pattern("11100110", true, rev != 0, raw);            /* 斜压横线：左边残段 + 主线 */
+        GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, rev != 0, 0U);
+        check(!st.is_cross && st.error > 0.5f, "装反=%d：横线残段与主线分开时跟主线（误差 %.2f > 0）", rev, st.error);
+
+        gray_pattern("11100111", true, rev != 0, raw);            /* 分岔：两条分开的宽线 */
+        GrayLogic_Process(&st, raw, GRAY_BIAS_RIGHT, true, rev != 0, 0U);
+        check(!st.is_cross && st.is_split && st.error > 2.0f, "装反=%d：分岔不算路口，偏右选线照常（误差 %.2f）",
+              rev, st.error);
+    }
+
+    /* 走真实的循迹：压上左侧 T 字时差速不向左打 */
+    sim_reset_world();
+    Motion_ResetLinePid();
+    (void)line_step_diff("00011100");
+    float d = line_step_diff("11111100");
+    check(d > 0.0f, "循迹压上左侧 T 字：差速仍按原偏差向右（%.1f mm/s），不拐进支线", d);
+    BspMotor_Stop();
+}
+
+/* 18. P 项变增益：小偏差比线性 P 软（直道不摆），大偏差比线性 P 硬（圆弧弯转得快） */
+static void case_line_gain(void)
+{
+    printf("\n== 18 循迹 P 变增益\n");
+    float p_small = Motion_LinePTerm(0.5f), p_big = Motion_LinePTerm(2.5f);
+    float want_small = CFG_LINE_PID_KP * 0.5f * (CFG_LINE_KP_CENTER_SCALE + CFG_LINE_KP_EDGE_GAIN * 0.5f);
+    float want_big = CFG_LINE_PID_KP * 2.5f * (CFG_LINE_KP_CENTER_SCALE + CFG_LINE_KP_EDGE_GAIN * 2.5f);
+    /* 按当前配置核对（CENTER=1、EDGE=0 时就是线性 P） */
+    check(fabsf(p_small - want_small) < 0.01f && fabsf(p_big - want_big) < 0.01f,
+          "误差 0.5 / 2.5：P %.1f / %.1f（按配置应 %.1f / %.1f）", p_small, p_big, want_small, want_big);
+    check(fabsf(Motion_LinePTerm(-2.5f) + p_big) < 0.01f, "左右对称");
+    float prev = 0.0f;
+    bool mono = true;
+    for (int i = 1; i <= 38; ++i) {
+        float p = Motion_LinePTerm(0.1f * (float)i);
+        if (p <= prev) { mono = false; }
+        prev = p;
+    }
+    check(mono, "0~3.8 单调增，不会偏得越多纠得越少");
+}
+
+/* 19. 灰度回差与两帧确认：线边缘读数在阈值附近抖时黑白不来回翻；全白、路口都要连续确认 */
+static void case_gray_hyst(void)
+{
+    printf("\n== 19 灰度回差与两帧确认\n");
+    static const uint16_t th[8] = CFG_GRAY_TH_DEFAULT;
+    gray_state_t st;
+    uint16_t raw[8];
+    memset(&st, 0, sizeof st);
+    memcpy(st.thresh, th, sizeof th);
+    const uint16_t t = th[3];
+
+    /* 通道 4 一直压线；通道 3 在阈值附近变化（不装反、黑为低、不屏蔽） */
+    gray_pattern("00001000", true, false, raw);
+    raw[3] = (uint16_t)(t + CFG_GRAY_HYST_ADC + 20U);            /* 明显白 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    raw[3] = (uint16_t)(t - CFG_GRAY_HYST_ADC / 2U);             /* 略低于阈值，但没越过回差 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check((st.bits & 0x08U) == 0U, "白 → 略低于阈值（%u，阈值 %u）仍判白", raw[3], t);
+    raw[3] = (uint16_t)(t - CFG_GRAY_HYST_ADC - 20U);            /* 越过回差 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check((st.bits & 0x08U) != 0U, "越过 阈值−回差（%u）才变黑", raw[3]);
+    raw[3] = (uint16_t)(t + CFG_GRAY_HYST_ADC / 2U);             /* 略高于阈值 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check((st.bits & 0x08U) != 0U, "黑 → 略高于阈值（%u）仍判黑", raw[3]);
+    raw[3] = (uint16_t)(t + CFG_GRAY_HYST_ADC + 20U);
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check((st.bits & 0x08U) == 0U, "越过 阈值+回差（%u）才变白", raw[3]);
+
+    /* 丢线确认：全白一帧不算丢线，误差保持；连续 CONFIRM 帧才算 */
+    gray_pattern("00000011", true, false, raw);                  /* 线在右，误差 +3.0 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    float e0 = st.error;
+    gray_pattern("00000000", true, false, raw);
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check(st.line_found && fabsf(st.error - e0) < 0.01f, "全白第 1 帧不算丢线，误差保持 %.2f（得 %.2f）", e0, st.error);
+    for (unsigned k = 1U; k < CFG_GRAY_CONFIRM_FRAMES; ++k) {
+        GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    }
+    check(!st.line_found && st.error > e0 + 0.01f && st.error < 3.79f,
+          "连续 %u 帧全白才丢线，向右找线，误差从 %.2f 往 3.8 靠（得 %.2f）",
+          (unsigned)CFG_GRAY_CONFIRM_FRAMES, e0, st.error);
+    gray_pattern("00000100", true, false, raw);
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check(st.line_found, "见到线一帧就算找回");
+
+    /* 上电后从没见过线：全白仍是“没找到” */
+    gray_state_t st2;
+    memset(&st2, 0, sizeof st2);
+    memcpy(st2.thresh, th, sizeof th);
+    gray_pattern("00000000", true, false, raw);
+    GrayLogic_Process(&st2, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check(!st2.line_found, "上电全白不算找到线");
+}
+
+/* 20. 路口保持封顶：短横线照常直行；整排一直压黑（阈值设错、大片黑区）不能一直直行，要报 LINE_LOST */
+static void case_cross_cap(void)
+{
+    printf("\n== 20 路口保持封顶\n");
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(0);                                   /* 全程：先循迹 */
+    run_ms(500);
+    sim_gray("11111111");                             /* 短横线：约 100 ms，远小于封顶距离 */
+    run_ms(100);
+    sim_gray("00011000");
+    run_ms(200);
+    check(Mission_GetState() == ST_TRACK_TO_OBS && Motion_GetLineLostMm() == 0.0f,
+          "压过短横线照常循迹（%s）", Mission_GetStateName());
+
+    float d0 = BspMotor_GetState()->total_dist_mm;
+    sim_gray("11111111");                             /* 一直整排压黑 */
+    bool got = wait_state(ST_FAULT, 8000U);
+    float moved = BspMotor_GetState()->total_dist_mm - d0;
+    check(got && strcmp(Mission_GetFaultReason(), "LINE_LOST") == 0, "一直整排压黑最终报 LINE_LOST（%s）",
+          Mission_GetFaultReason());
+    check(moved < CFG_LINE_CROSS_MAX_MM + CFG_LINE_LOST_MAX_MM + 60.0f, "停下前只走了 %.0f mm", moved);
+}
+
+/* 21. 避障回线前清灰度状态：绕行时不采灰度，回线第一帧不能沿用撞障前“在线上”的判断 */
+static void case_rejoin_reset(void)
+{
+    printf("\n== 21 回线前清灰度状态\n");
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(1);                                   /* 从避障段起跑 */
+    run_ms(800);
+    g_obstacle = true;
+    check(wait_state(ST_AVOID_OBS, 1000U), "看到障碍进入避障");
+    g_obstacle = false;
+    sim_gray("00000000");                             /* 绕行和回线一路都是白 */
+    bool stale = false;
+    for (uint32_t t = 0U; (t < 20000U) && (Mission_GetState() == ST_AVOID_OBS); ++t) {
+        run_ms(1);
+        if (g_gray.line_found && (g_gray.white_frames >= 1U)) { stale = true; }
+    }
+    check(!stale, "回线搜索的全白帧从不被当成有线");
+    check(Mission_GetState() == ST_FAULT && strcmp(Mission_GetFaultReason(), "REJOIN_FAIL") == 0,
+          "一直找不到线报 REJOIN_FAIL（%s）", Mission_GetFaultReason());
+}
+
+/* 22. 丢线误差平滑：线从中间消失时不一步跳到 ±3.8，每帧按一阶低通往边界靠，单调、不过冲 */
+static void case_lost_smooth(void)
+{
+    printf("\n== 22 丢线误差平滑\n");
+    static const uint16_t th[8] = CFG_GRAY_TH_DEFAULT;
+    gray_state_t st;
+    uint16_t raw[8];
+    memset(&st, 0, sizeof st);
+    memcpy(st.thresh, th, sizeof th);
+
+    gray_pattern("00010000", true, false, raw);                  /* 线在中间偏左，误差 −0.5 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    float prev = st.error;
+    gray_pattern("00000000", true, false, raw);
+    float first_lost = 0.0f, max_step = 0.0f;
+    bool mono = true, got_first = false;
+    for (int i = 0; i < 40; ++i) {
+        GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+        if (!st.line_found && !got_first) { first_lost = st.error; got_first = true; }
+        float step = prev - st.error;                            /* 向左找线，误差应越来越负 */
+        if (step < -0.001f) { mono = false; }
+        if (step > max_step) { max_step = step; }
+        if (st.error < -3.8f - 0.001f) { mono = false; }
+        prev = st.error;
+    }
+    check(got_first && first_lost > -1.2f, "确认丢线第一帧误差 %.2f，没有一步跳到 -3.8", first_lost);
+    check(max_step <= CFG_GRAY_LOST_ERR_SMOOTH * 3.3f + 0.01f, "每帧最多变 %.2f", max_step);
+    check(mono, "误差单调往左、不越过 -3.8");
+    check(st.error < -3.7f, "约 40 帧后到边界附近（%.2f）", st.error);
+
+    gray_pattern("00000100", true, false, raw);                  /* 重新看到线：立即用实际误差 */
+    GrayLogic_Process(&st, raw, GRAY_BIAS_CENTER, true, false, 0U);
+    check(st.line_found && fabsf(st.error - 1.5f) < 0.01f, "见到线误差立即为实测 1.50（得 %.2f）", st.error);
+}
+
+/* 23. 运动尖峰：死区补偿过零不硬切换；目标速度限加速度、停车立即生效；误差换来源那一拍不算微分 */
+static void case_spikes(void)
+{
+    printf("\n== 23 运动尖峰\n");
+    sim_reset_world();
+    run_ms(200);
+    BspMotor_SetDiffSpeed(10.0f, 10.0f);                  /* 内侧轮目标在 0 附近：+10 → −10 */
+    run_ms(300);
+    int p_pos = g_pwm[0];
+    BspMotor_SetDiffSpeed(-10.0f, -10.0f);
+    run_ms(20);
+    int p_neg = g_pwm[0];
+    check(abs(p_pos - p_neg) < 400, "目标 +10 → -10，PWM %d → %d，没有 ±%d 硬切换",
+          p_pos, p_neg, CFG_WHEEL_PWM_DEADZONE);
+    BspMotor_Stop();
+    run_ms(300);
+
+    sim_reset_world();
+    run_ms(200);
+    BspMotor_SetDiffSpeed(300.0f, 300.0f);                /* 从静止一步给到 300 */
+    int prev = 0, first = 0, max_up = 0;
+    for (int k = 0; k < 20; ++k) {
+        run_ms(20);
+        if (k == 0) { first = g_pwm[0]; }
+        else if (g_pwm[0] - prev > max_up) { max_up = g_pwm[0] - prev; }
+        prev = g_pwm[0];
+    }
+    check(first < 800, "起步第一拍 PWM %d，没有一步到满速对应的输出", first);
+    check(max_up < 400, "之后每拍最多增 %d", max_up);
+    check(BspMotor_GetState()->wheel_spd_mm_s[0] > 200.0f, "400 ms 内加到 %.0f mm/s",
+          BspMotor_GetState()->wheel_spd_mm_s[0]);
+    BspMotor_Stop();
+    check(all_pwm_zero(), "BspMotor_Stop 立即发零 PWM，不受加速度限制");
+    run_ms(300);
+    BspMotor_SetDiffSpeed(300.0f, 300.0f);                /* 停车后再起步：要从 0 重新加速 */
+    run_ms(20);
+    check(g_pwm[0] < 800, "停车后再起步第一拍 PWM %d，不沿用停车前的速度", g_pwm[0]);
+    BspMotor_Stop();
+    run_ms(300);
+
+    /* 丢线后找回：误差从找线值换成实测值，D 项不冒尖峰 */
+    sim_reset_world();
+    Motion_ResetLinePid();
+    for (int i = 0; i < 5; ++i) { (void)line_step_diff("10000000"); }
+    for (int i = 0; i < 30; ++i) { (void)line_step_diff("00000000"); }
+    float d1 = line_step_diff("00000100");                /* 实测 +1.5 */
+    float p1 = Motion_LinePTerm(1.5f);
+    check(fabsf(d1 - p1) < 10.0f, "找回线那一拍差速 %.0f，约等于 P 项 %.0f", d1, p1);
+
+    /* 路口保持结束：误差从保持值换成实测值，同样不冒尖峰 */
+    Motion_ResetLinePid();
+    for (int i = 0; i < 5; ++i) { (void)line_step_diff("00011000"); }
+    for (int i = 0; i < 3; ++i) { (void)line_step_diff("11111111"); }
+    float d2 = line_step_diff("00000011");                /* 实测 +3.0 */
+    float p2 = Motion_LinePTerm(3.0f);
+    check(fabsf(d2 - p2) < 10.0f, "路口保持结束那一拍差速 %.0f，约等于 P 项 %.0f", d2, p2);
+    BspMotor_Stop();
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -939,6 +1212,13 @@ int main(void)
     case_corner();
     case_sonar();
     case_lost_spin();
+    case_cross();
+    case_line_gain();
+    case_gray_hyst();
+    case_cross_cap();
+    case_rejoin_reset();
+    case_lost_smooth();
+    case_spikes();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

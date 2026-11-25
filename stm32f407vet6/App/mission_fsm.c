@@ -362,6 +362,9 @@ static void step_avoid_obs(uint32_t now_ms)
         if (Motion_UpdateTurnDeg()) {
             s_avoid_step = AVOID_STEP_REJOIN_SEARCH;
             s_rejoin_hits = 0U;
+            /* 绕行时不采灰度，状态还是撞障前在线上留下的（有线、误差约 0）。不清掉的话，
+             * 回线第一帧全白也会因“两帧才确认丢线”被当成见到线 */
+            BspGray_ResetTrack();
             Motion_StartDriveDist(CFG_AVOID_REJOIN_MAX_MM, CFG_SPEED_AVOID_MM_S * 0.85f);
         }
         break;

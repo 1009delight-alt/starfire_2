@@ -94,7 +94,10 @@ void UiPage_Gray(const gray_state_t *g, bool calib)
         BspOled_Printf((uint8_t)(4U + (i % 4U) * 40U), (uint8_t)(84U + (i / 4U) * 9U), 1U, "%4u", g->raw[i]);
     }
     BspOled_Printf(2U, 103U, 2U, "E:%+.2f", g->error);
-    if (g->is_split) {
+    if (g->is_cross) {
+        BspOled_SetColor(OLED_C_GREEN);
+        BspOled_DrawStr(112U, 103U, "CRS", 2U);
+    } else if (g->is_split) {
         BspOled_SetColor(OLED_C_YELLOW);
         BspOled_DrawStr(112U, 103U, "SPL", 2U);
     }
@@ -157,8 +160,9 @@ void UiPage_Line(const gray_state_t *g, const motor_state_t *m, bool running, co
     BspOled_Printf(2U, 22U, 2U, "BIAS:%s", bias_name);
     draw_gray_blocks(g->bits, 41U, 18U);
     BspOled_Printf(2U, 64U, 2U, "ERR:%+.2f", g->error);
-    BspOled_SetColor(g->is_split ? OLED_C_YELLOW : OLED_C_WHITE);
-    BspOled_Printf(2U, 83U, 1U, "SPLIT:%-3s  D:%6dmm", g->is_split ? "YES" : "NO", (int)m->total_dist_mm);
+    BspOled_SetColor(g->is_cross ? OLED_C_GREEN : (g->is_split ? OLED_C_YELLOW : OLED_C_WHITE));
+    BspOled_Printf(2U, 83U, 1U, "%-5s  D:%6dmm", g->is_cross ? "CROSS" : (g->is_split ? "SPLIT" : "LINE"),
+                   (int)m->total_dist_mm);
     /* 左右轮目标/实测速度：差速给出来了轮子却没跟上，问题在轮速环或机械，不在循迹 PID */
     BspOled_SetColor(OLED_C_WHITE);
     BspOled_Printf(2U, 95U, 1U, "L T%+4d A%+4d mm/s",

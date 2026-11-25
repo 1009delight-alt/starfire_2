@@ -109,6 +109,11 @@ void BspGray_Sample(gray_bias_mode_t bias_mode)
                       (uint8_t)CFG_GRAY_DEAD_MASK);
 }
 
+void BspGray_ResetTrack(void)
+{
+    GrayLogic_ResetTrack(&s_gray);
+}
+
 const gray_state_t *BspGray_GetState(void)
 {
     return &s_gray;
@@ -134,7 +139,8 @@ void BspGray_CalibFeed(void)
 void BspGray_CalibFinishAndApply(void)
 {
     for (int i = 0; i < 8; ++i) {
-        if (s_cal_max[i] > (uint16_t)(s_cal_min[i] + 150U)) {
+        /* 黑白差要大过两倍回差再留余量，否则这一路按回差永远翻不过来 */
+        if ((uint32_t)s_cal_max[i] > (uint32_t)s_cal_min[i] + 2U * CFG_GRAY_HYST_ADC + 100U) {
             s_gray.thresh[i] = (uint16_t)(((uint32_t)s_cal_min[i] + (uint32_t)s_cal_max[i]) >> 1);
         }
     }

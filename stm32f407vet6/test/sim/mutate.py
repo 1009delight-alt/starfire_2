@@ -41,7 +41,7 @@ MUTS = {
     "循迹差速符号写反": [("App/motion_ctrl.c", r"float left_spd  = spd + diff;", r"float left_spd  = spd - diff;"),
                         ("App/motion_ctrl.c", r"float right_spd = spd - diff;", r"float right_spd = spd + diff;")],
     "12 循迹微分不滤波": [("App/motion_ctrl.c", r"s_line_d_filt += CFG_LINE_D_LPF_ALPHA * (d_raw - s_line_d_filt);", r"s_line_d_filt = d_raw;")],
-    "12 复位后首拍微分突跳": [("App/motion_ctrl.c", r"float d_raw = s_line_have_prev ? ((err - s_line_prev_err) / dt_s * 0.02f) : 0.0f;", r"float d_raw = (err - s_line_prev_err) / dt_s * 0.02f;")],
+    "12 复位后首拍微分突跳": [("App/motion_ctrl.c", r"float d_raw = (s_line_have_prev && !src_switch)", r"float d_raw = (!src_switch)")],
     "13 内侧轮不能制动": [("Bsp/bsp_motor.c", r"if (tgt > 0.0f && u < -(float)CFG_WHEEL_BRAKE_PWM) { u = -(float)CFG_WHEEL_BRAKE_PWM; }", r"if (tgt > 0.0f && u < 0.0f) { u = 0.0f; }")],
     "13 制动不限幅": [("Bsp/bsp_motor.c", r"if (tgt > 0.0f && u < -(float)CFG_WHEEL_BRAKE_PWM) { u = -(float)CFG_WHEEL_BRAKE_PWM; }", r"(void)0;")],
     "14 丢线差速不单独限幅": [("App/motion_ctrl.c", r"diff = clampf(diff, -CFG_LINE_LOST_DIFF_MM_S, CFG_LINE_LOST_DIFF_MM_S);", r"(void)0;")],
@@ -53,6 +53,26 @@ MUTS = {
     "15 超声失效仍起跑": [("App/mission_fsm.c", r"(s_profile != MISSION_PROFILE_PARK_ONLY) && !BspSonar_IsHealthy(now_ms)) {", r"0) {")],
     "16 丢线不按转角停": [("App/mission_fsm.c", r"|| (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)", r"")],
     "15 视觉任务不下发": [("App/mission_fsm.c", r"if (BspOpenmv_GetState()->target_task != task) {", r"if (0) {")],
+    # 2026-11-24 路口直行、P 变增益
+    "17 路口不保持误差": [("Bsp/gray_logic.c", r"    if (cross_cand) {", r"    if (0) {")],
+    "17 分岔误判路口": [("Bsp/gray_logic.c", r"(black_cnt >= CFG_GRAY_CROSS_MIN_BLACK) && (clusters == 1U);", r"(black_cnt >= CFG_GRAY_CROSS_MIN_BLACK);")],
+    "17 多段取全部平均": [("Bsp/gray_logic.c", r"if ((mode == GRAY_BIAS_CENTER) && (clusters >= 2U)) {", r"if (0) {")],
+    # “18 P 不变增益”（改回线性 P）在 CENTER=1、EDGE=0 时与原码等价、抓不到，变增益重新启用后再加回：
+    # ("App/motion_ctrl.c", r"return CFG_LINE_PID_KP * err * (CFG_LINE_KP_CENTER_SCALE + CFG_LINE_KP_EDGE_GAIN * fabsf(err));", r"return CFG_LINE_PID_KP * err;")
+    "20 路口保持不封顶": [("App/motion_ctrl.c", r"if (!g->line_found || flooded) {", r"if (!g->line_found) {")],
+    "21 回线前不清灰度": [("App/mission_fsm.c", r"            BspGray_ResetTrack();", r"            (void)0;")],
+    "19 灰度无回差": [("Bsp/gray_logic.c", r"int32_t band = was_black ? (int32_t)CFG_GRAY_HYST_ADC : -(int32_t)CFG_GRAY_HYST_ADC;", r"int32_t band = 0;")],
+    "19 丢线不确认": [("Bsp/gray_logic.c", r"} else if (st->white_frames >= CFG_GRAY_CONFIRM_FRAMES) {", r"} else if (1) {")],
+    "19 路口不确认": [("Bsp/gray_logic.c", r"st->is_cross = cross_cand && (st->cross_frames >= CFG_GRAY_CONFIRM_FRAMES);", r"st->is_cross = cross_cand;")],
+    "19 未确认丢线时误差乱跳": [("Bsp/gray_logic.c", r"""    } else if (st->line_found) {
+        /* 全白但还没确认丢线""", r"""    } else if (0) {
+        /* 全白但还没确认丢线""")],
+    "23 死区补偿过零硬切换": [("Bsp/bsp_motor.c", r"float dead = (float)CFG_WHEEL_PWM_DEADZONE * clampf(tgt / CFG_WHEEL_DEAD_RAMP_MM_S, -1.0f, 1.0f);", r"float dead = (tgt > 0.0f) ? (float)CFG_WHEEL_PWM_DEADZONE : -(float)CFG_WHEEL_PWM_DEADZONE;")],
+    "23 目标速度不限加速度": [("Bsp/bsp_motor.c", r"s_cmd_spd[i] += clampf(tgt - s_cmd_spd[i], -dv_max, dv_max);", r"s_cmd_spd[i] = tgt;")],
+    "23 停车不清限速目标": [("Bsp/bsp_motor.c", r"""        s_cmd_spd[i] = 0.0f;
+        s_pid_integ[i] = 0.0f;""", r"""        s_pid_integ[i] = 0.0f;""")],
+    "23 换来源时仍算微分": [("App/motion_ctrl.c", r"float d_raw = (s_line_have_prev && !src_switch)", r"float d_raw = (s_line_have_prev)")],
+    "22 丢线误差一步到边界": [("Bsp/gray_logic.c", r"st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);", r"st->error = target;")],
 }
 
 ONLY = sys.argv[1:]
