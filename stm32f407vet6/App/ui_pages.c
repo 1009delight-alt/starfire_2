@@ -36,12 +36,14 @@ void UiPage_MotorEnc(const motor_state_t *m, uint8_t next_step)
     BspOled_Printf(98U, 22U, 2U, "%4.1fV", m->battery_v);
     BspOled_SetColor(OLED_C_WHITE);
 
+    /* 按车上位置显示（bsp_motor 内部数组按位置排，驱动板通道由 CFG_MOTOR_SWAP_LR 换算） */
+    static const char *const k_pos[4] = { "LF", "LB", "RF", "RB" };
     for (uint8_t i = 0U; i < 4U; ++i) {
-        BspOled_Printf(2U, (uint8_t)(40U + i * 16U), 2U, "M%u %8ld", (unsigned)(i + 1U), (long)m->fwd_enc[i]);
+        BspOled_Printf(2U, (uint8_t)(40U + i * 16U), 2U, "%s%8ld", k_pos[i], (long)m->fwd_enc[i]);
     }
     BspOled_Printf(2U, 106U, 1U, "D:%5dmm   Y:%4ddeg", (int)m->total_dist_mm, (int)m->seg_yaw_deg);
 
-    if (next_step < 4U) { (void)snprintf(buf, sizeof(buf), "Short:Run M%u  Long:Clear", (unsigned)(next_step + 1U)); }
+    if (next_step < 4U) { (void)snprintf(buf, sizeof(buf), "Short:Run %s  Long:Clear", k_pos[next_step]); }
     else                { (void)snprintf(buf, sizeof(buf), "Short:Run ALL  Long:Clear"); }
     BspOled_Footer(buf);
 }

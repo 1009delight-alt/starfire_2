@@ -68,7 +68,9 @@ MUTS = {
         /* 全白但还没确认丢线""", r"""    } else if (0) {
         /* 全白但还没确认丢线""")],
     "23 死区补偿过零硬切换": [("Bsp/bsp_motor.c", r"float dead = (float)CFG_WHEEL_PWM_DEADZONE * clampf(tgt / CFG_WHEEL_DEAD_RAMP_MM_S, -1.0f, 1.0f);", r"float dead = (tgt > 0.0f) ? (float)CFG_WHEEL_PWM_DEADZONE : -(float)CFG_WHEEL_PWM_DEADZONE;")],
-    "23 目标速度不限加速度": [("Bsp/bsp_motor.c", r"s_cmd_spd[i] += clampf(tgt - s_cmd_spd[i], -dv_max, dv_max);", r"s_cmd_spd[i] = tgt;")],
+    "23 目标速度不限加速度": [("Bsp/bsp_motor.c", r"        s_cmd_spd[i] = nc;", r"        s_cmd_spd[i] = tgt; (void)nc;")],
+    "29 换向减速不放宽": [("Bsp/bsp_motor.c", r"nc = c + clampf(d, -dv_dec, dv_dec);", r"nc = c + clampf(d, -dv_acc, dv_acc);")],
+    "29 不做左右换算": [("Bsp/bsp_motor.c", r"#define POS_CH(p)  ((CFG_MOTOR_SWAP_LR != 0U) ? ((p) ^ 2) : (p))", r"#define POS_CH(p)  (p)")],
     "23 停车不清限速目标": [("Bsp/bsp_motor.c", r"""        s_cmd_spd[i] = 0.0f;
         s_last_pwm[i] = 0;""", r"""        s_last_pwm[i] = 0;""")],
     "23 换来源时仍算微分": [("App/motion_ctrl.c", r"float d_raw = (s_line_have_prev && !src_switch)", r"float d_raw = (s_line_have_prev)")],

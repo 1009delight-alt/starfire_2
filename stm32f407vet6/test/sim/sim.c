@@ -152,13 +152,19 @@ static bool  g_enc_frozen = false;
 static bool  g_enc_silent = false;  /* 驱动板一帧 $MAll 都不回 */
 static float g_load = 1.0f;     /* 负载系数：越小轮子越难转 */
 static int   g_pwm_frames = 0;
-static const int k_sign[4] = { CFG_ENC_SIGN_M1, CFG_ENC_SIGN_M2, CFG_ENC_SIGN_M3, CFG_ENC_SIGN_M4 };
+/* 模拟电机板：g_pwm/g_v/g_pos/g_raw_out 按车上位置（0 左前 1 左后 2 右前 3 右后）；帧里是通道顺序 M1~M4，
+ * 通道与位置的对应和固件一样由 CFG_MOTOR_SWAP_LR 决定，只在收发帧时换算。编码器符号跟着通道 */
+#define SIM_POS_CH(p)  ((CFG_MOTOR_SWAP_LR != 0U) ? ((p) ^ 2) : (p))
+static char g_last_pwm_frame[48];
+static const int k_sign_ch[4] = { CFG_ENC_SIGN_M1, CFG_ENC_SIGN_M2, CFG_ENC_SIGN_M3, CFG_ENC_SIGN_M4 };
+#define k_sign_pos(p)  (k_sign_ch[SIM_POS_CH(p)])
 
 static void motor_on_tx(const char *s)
 {
-    int a, b, c, d;
-    if (sscanf(s, "$pwm:%d,%d,%d,%d#", &a, &b, &c, &d) == 4) {
-        g_pwm[0] = a; g_pwm[1] = b; g_pwm[2] = c; g_pwm[3] = d;
+    int ch[4];
+    if (sscanf(s, "$pwm:%d,%d,%d,%d#", &ch[0], &ch[1], &ch[2], &ch[3]) == 4) {
+        snprintf(g_last_pwm_frame, sizeof g_last_pwm_frame, "%s", s);
+        for (int p = 0; p < 4; ++p) { g_pwm[p] = ch[SIM_POS_CH(p)]; }
         g_pwm_frames++;
     }
 }
@@ -176,13 +182,13 @@ static void motor_world_1ms(void)
         if ((g_drag_mask & (1 << i)) != 0) { g_v[i] = g_drag_v; }   /* 被车身拖着走：轮速不由本轮 PWM 决定 */
         g_pos[i] += g_v[i] * 0.001;
         if (!g_enc_frozen) {
-            g_raw_out[i] = (int32_t)lround(g_pos[i] * CFG_ENC_COUNTS_PER_MM) * k_sign[i];
+            g_raw_out[i] = (int32_t)lround(g_pos[i] * CFG_ENC_COUNTS_PER_MM) * k_sign_pos(i);
         }
     }
     if (((g_now % 10U) == 0U) && !g_enc_silent) {
         char f[64];
-        snprintf(f, sizeof f, "$MAll:%ld,%ld,%ld,%ld#", (long)g_raw_out[0], (long)g_raw_out[1],
-                 (long)g_raw_out[2], (long)g_raw_out[3]);
+        snprintf(f, sizeof f, "$MAll:%ld,%ld,%ld,%ld#", (long)g_raw_out[SIM_POS_CH(0)], (long)g_raw_out[SIM_POS_CH(1)],
+                 (long)g_raw_out[SIM_POS_CH(2)], (long)g_raw_out[SIM_POS_CH(3)]);
         q_push_str(&g_rx[BSP_UART_MOTOR], f);
     }
 }
@@ -1487,6 +1493,39 @@ static void case_restart_gray(void)
     g_estop = false;
 }
 
+/* 29. 电机左右对调换算；转向差速换向不被平均速度的加速度上限拖慢 */
+static void case_swap_and_steer(void)
+{
+    printf("\n== 29 左右对调与转向响应\n");
+    sim_reset_world();
+    run_ms(200);
+    BspMotor_SetRawPwm(500, 0, 0, 0);                 /* 按位置：左前 */
+    const char *want = (CFG_MOTOR_SWAP_LR != 0U) ? "$pwm:0,0,500,0#" : "$pwm:500,0,0,0#";
+    check(strcmp(g_last_pwm_frame, want) == 0, "左前 500 发成 %s（SWAP_LR=%u 应 %s）",
+          g_last_pwm_frame, (unsigned)CFG_MOTOR_SWAP_LR, want);
+    BspMotor_Stop();
+    run_ms(100);
+    BspMotor_SetDiffSpeed(150.0f, 150.0f);
+    run_ms(600);
+    const motor_state_t *m = BspMotor_GetState();
+    check(m->wheel_spd_mm_s[0] > 100.0f && m->wheel_spd_mm_s[2] > 100.0f && m->total_dist_mm > 30.0f,
+          "直行时按位置测到的轮速 %.0f / %.0f，里程 %.0f mm 为正", m->wheel_spd_mm_s[0], m->wheel_spd_mm_s[2],
+          m->total_dist_mm);
+    BspMotor_Stop();
+    run_ms(300);
+
+    /* 找线时一侧轮从 −265 换到 +361（11-25 车上记录的场景）：差速放宽后几拍内换向 */
+    BspMotor_SetDiffSpeed(-265.0f, 335.0f);
+    run_ms(800);
+    BspMotor_SetDiffSpeed(361.0f, -198.0f);
+    uint32_t t0 = g_now;
+    while ((g_v[0] <= 0.0f) && (g_now - t0 < 2000U)) { run_ms(1); }
+    printf("      左轮实际换向用时 %lu ms\n", (unsigned long)(g_now - t0));
+    check(g_now - t0 <= 150U, "左轮目标换向后 %lu ms 实际转正", (unsigned long)(g_now - t0));
+    BspMotor_Stop();
+    run_ms(300);
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -1518,6 +1557,7 @@ int main(void)
     case_review3_1125();
     case_review4_1125();
     case_restart_gray();
+    case_swap_and_steer();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

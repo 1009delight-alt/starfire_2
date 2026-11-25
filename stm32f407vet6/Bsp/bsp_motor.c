@@ -31,12 +31,22 @@ static uint32_t s_stall_ms[4];          /* 各轮“有目标却不动”的累�
 static char     s_rx_frame[80];
 static uint8_t  s_rx_used = 0U;
 
-static const int32_t k_enc_sign[4] = {
-    CFG_ENC_SIGN_M1, CFG_ENC_SIGN_M2, CFG_ENC_SIGN_M3, CFG_ENC_SIGN_M4
+/* 本文件内部所有四元数组都按车上位置排：0 左前、1 左后、2 右前、3 右后。
+ * 驱动板通道 M1~M4 与位置的对应由 CFG_MOTOR_SWAP_LR 决定：0 为 M1 左前…M4 右后；
+ * 1 为左右对调（M1/M2 接的是右侧、M3/M4 接的是左侧）。只在发帧和收 $MAll 时换算（对调是自逆的）。
+ * 编码器符号和前馈补偿是跟着电机走的，按通道号填在 config.h，这里换成位置顺序 */
+#define POS_CH(p)  ((CFG_MOTOR_SWAP_LR != 0U) ? ((p) ^ 2) : (p))
+#if (CFG_MOTOR_SWAP_LR != 0U)
+static const int32_t k_enc_sign[4] = { CFG_ENC_SIGN_M3, CFG_ENC_SIGN_M4, CFG_ENC_SIGN_M1, CFG_ENC_SIGN_M2 };
+static const float k_ff_scale[4] = {
+    CFG_WHEEL_FF_SCALE_M3, CFG_WHEEL_FF_SCALE_M4, CFG_WHEEL_FF_SCALE_M1, CFG_WHEEL_FF_SCALE_M2
 };
+#else
+static const int32_t k_enc_sign[4] = { CFG_ENC_SIGN_M1, CFG_ENC_SIGN_M2, CFG_ENC_SIGN_M3, CFG_ENC_SIGN_M4 };
 static const float k_ff_scale[4] = {
     CFG_WHEEL_FF_SCALE_M1, CFG_WHEEL_FF_SCALE_M2, CFG_WHEEL_FF_SCALE_M3, CFG_WHEEL_FF_SCALE_M4
 };
+#endif
 
 static float clampf(float v, float lo, float hi)
 {
@@ -52,23 +62,23 @@ static int16_t clamp_i16(int32_t v, int16_t lo, int16_t hi)
     return (int16_t)v;
 }
 
+/* 参数按位置（左前、左后、右前、右后）给，发出去按通道顺序 M1~M4 */
 static void send_pwm_frame(int16_t m1, int16_t m2, int16_t m3, int16_t m4)
 {
     char buf[48];
-    s_mot.last_pwm[0] = m1;
-    s_mot.last_pwm[1] = m2;
-    s_mot.last_pwm[2] = m3;
-    s_mot.last_pwm[3] = m4;
+    const int16_t v[4] = { m1, m2, m3, m4 };
+    for (int i = 0; i < 4; ++i) { s_mot.last_pwm[i] = v[i]; }
     (void)snprintf(buf, sizeof(buf), "$pwm:%d,%d,%d,%d#",
-                   (int)m1, (int)m2, (int)m3, (int)m4);
+                   (int)v[POS_CH(0)], (int)v[POS_CH(1)], (int)v[POS_CH(2)], (int)v[POS_CH(3)]);
     BspUart_SendStr(BSP_UART_MOTOR, buf);
 }
 
 static void send_spd_frame(int16_t m1, int16_t m2, int16_t m3, int16_t m4)
 {
     char buf[48];
+    const int16_t v[4] = { m1, m2, m3, m4 };
     (void)snprintf(buf, sizeof(buf), "$spd:%d,%d,%d,%d#",
-                   (int)m1, (int)m2, (int)m3, (int)m4);
+                   (int)v[POS_CH(0)], (int)v[POS_CH(1)], (int)v[POS_CH(2)], (int)v[POS_CH(3)]);
     BspUart_SendStr(BSP_UART_MOTOR, buf);
 }
 
@@ -95,8 +105,10 @@ static bool parse_4_int32(const char *s, int32_t out[4])
 static void handle_motor_frame(const char *frame, uint32_t now_ms)
 {
     if (strncmp(frame, "$MAll:", 6) == 0) {
-        int32_t vals[4];
-        if (parse_4_int32(frame + 6, vals)) {
+        int32_t vals_ch[4];
+        if (parse_4_int32(frame + 6, vals_ch)) {
+            /* 帧里是通道顺序 M1~M4，换成位置顺序 */
+            const int32_t vals[4] = { vals_ch[POS_CH(0)], vals_ch[POS_CH(1)], vals_ch[POS_CH(2)], vals_ch[POS_CH(3)] };
             if (s_have_base == 0U) {
                 for (int i = 0; i < 4; ++i) {
                     s_base_raw[i] = vals[i];
@@ -282,12 +294,27 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
         return;
     }
 
-    /* 4. 闭环速度输出。目标速度按加速度上限逐周期逼近 target_spd_mm_s：上层一步给到位（起步、换赛段、
-     * 找线降速、定距定角开始）时 PWM 不跟着突跳。急停和 BspMotor_Stop 不经过这里，立即生效 */
-    const float dv_max = CFG_WHEEL_ACC_MAX_MM_S2 * dt_s;
+    /* 4. 闭环速度输出。目标速度逐周期逼近 target_spd_mm_s：加速（离开 0）按 CFG_WHEEL_ACC_MAX_MM_S2，
+     * 起步、换赛段、定距定角开始时 PWM 不突跳；减速（朝 0 走）按更宽的 CFG_WHEEL_DEC_MAX_MM_S2，过 0 之后
+     * 的部分又按加速限。原来四轮加减速一律按 2000 限，找线时一侧轮从 −265 换向到 +361 要约 300 ms，
+     * 车多转一截才回头（11-25 车上记录）。急停和 BspMotor_Stop 不经过这里，立即生效 */
+    const float dv_acc = CFG_WHEEL_ACC_MAX_MM_S2 * dt_s;
+    const float dv_dec = CFG_WHEEL_DEC_MAX_MM_S2 * dt_s;
     for (int i = 0; i < 4; ++i) {
         float tgt = clampf(s_mot.target_spd_mm_s[i], -CFG_WHEEL_SPD_MAX_MM_S, CFG_WHEEL_SPD_MAX_MM_S);
-        s_cmd_spd[i] += clampf(tgt - s_cmd_spd[i], -dv_max, dv_max);
+        float c = s_cmd_spd[i];
+        float d = tgt - c;
+        bool toward_zero = ((c > 0.0f) && (d < 0.0f)) || ((c < 0.0f) && (d > 0.0f));
+        float nc;
+        if (toward_zero) {
+            nc = c + clampf(d, -dv_dec, dv_dec);
+            if ((nc > 0.0f) != (c > 0.0f)) {
+                nc = clampf(nc, -dv_acc, dv_acc);   /* 过 0 后反向那一段仍按加速限 */
+            }
+        } else {
+            nc = c + clampf(d, -dv_acc, dv_acc);
+        }
+        s_cmd_spd[i] = nc;
     }
 #if (CFG_MOTOR_CTRL_MODE == MOTOR_MODE_DRIVER_SPD)
     int16_t sp[4];

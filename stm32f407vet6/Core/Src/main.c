@@ -292,6 +292,54 @@ static void run_dbg_openmv(void)
 #endif
 
 #if (APP_RUN_MODE == RUN_MODE_DBG_LINE_ONLY)
+/* 车上循迹记录：跑的时候 PWLink 连不住，所以每 20 ms 记一帧进环形缓冲，停车即冻结，
+ * 停车后不断电插上 PWLink 用 scripts/line_log.py 读出。起跑时清空。只在本调试模式编译 */
+#define LINE_LOG_N   500U                    /* 500 × 20 ms = 最近 10 s */
+typedef struct {
+    uint32_t ms;            /* HAL_GetTick */
+    int16_t  err100;        /* 灰度误差 × 100 */
+    int16_t  tl, tr;        /* 左右轮组目标 (mm/s，M1/M3) */
+    int16_t  vl, vr;        /* 左右轮组实测 (mm/s，前后两轮平均) */
+    uint8_t  bits;          /* 8 路判黑，bit0 = 屏上最左 */
+    uint8_t  flags;         /* bit0 有线 bit1 分段 bit2 误差保持 bit3 丢线找线 bit4 路口确认 */
+} line_log_t;               /* 16 字节 */
+/* 放在 CCM RAM 开头（0x10000000，工程里没有任何段放在 CCM，启动代码不清零它）：复位、看门狗复位后
+ * 记录还在，断电才丢。不用 SRAM 开头的 .bss.noinit：11-25 实测车被复位进了 ST 内置引导程序（BOOT0 为高），
+ * 引导程序会占用 SRAM 开头，把记录冲掉。CCM 只有 CPU 能访问，这里也只由 CPU 读写。
+ * magic 不对（上电后第一次）才清头部 */
+#define LINE_LOG_MAGIC  0x4C4E4C47UL         /* "GLNL" */
+typedef struct {
+    uint32_t   magic;
+    uint32_t   head;        /* 下一帧写入位置 */
+    uint32_t   count;       /* 已记帧数（封顶 LINE_LOG_N） */
+    uint32_t   stop;        /* 0 在跑/未跑 1 按键 2 丢线超限 3 电机故障 */
+    line_log_t e[LINE_LOG_N];
+} line_rec_t;
+#define LINE_LOG_ADDR   0x10000000UL         /* scripts/line_log.py 按这个地址读 */
+#define g_line_rec      (*(volatile line_rec_t *)LINE_LOG_ADDR)
+#define g_line_log        (g_line_rec.e)
+#define g_line_log_head   (g_line_rec.head)
+#define g_line_log_count  (g_line_rec.count)
+#define g_line_log_stop   (g_line_rec.stop)
+
+static void line_log_put(uint32_t now)
+{
+    const gray_state_t  *g  = BspGray_GetState();
+    const motor_state_t *ms = BspMotor_GetState();
+    volatile line_log_t *e = &g_line_log[g_line_log_head];
+    e->ms = now;
+    e->err100 = (int16_t)(g->error * 100.0f);
+    e->tl = (int16_t)ms->target_spd_mm_s[0];
+    e->tr = (int16_t)ms->target_spd_mm_s[2];
+    e->vl = (int16_t)(0.5f * (ms->wheel_spd_mm_s[0] + ms->wheel_spd_mm_s[1]));
+    e->vr = (int16_t)(0.5f * (ms->wheel_spd_mm_s[2] + ms->wheel_spd_mm_s[3]));
+    e->bits = g->bits;
+    e->flags = (uint8_t)((g->line_found ? 0x01U : 0U) | (g->is_split ? 0x02U : 0U) | (g->held ? 0x04U : 0U) |
+                         (Motion_IsLineLost() ? 0x08U : 0U) | (g->is_cross ? 0x10U : 0U));
+    g_line_log_head = (g_line_log_head + 1U) % LINE_LOG_N;
+    if (g_line_log_count < LINE_LOG_N) { g_line_log_count++; }
+}
+
 /* 纯循迹 PID 调试：短按 KEY 启停循迹，长按切换 CENTER / LEFT / RIGHT 偏置 */
 static void run_dbg_line_only(void)
 {
@@ -299,6 +347,12 @@ static void run_dbg_line_only(void)
     gray_bias_mode_t bias = GRAY_BIAS_CENTER;
     uint32_t last_ctrl = 0U, last_oled = 0U;
     Board_LedSetPattern(LED_PAT_SLOW_BLINK);
+    if ((g_line_rec.magic != LINE_LOG_MAGIC) || (g_line_log_head >= LINE_LOG_N) || (g_line_log_count > LINE_LOG_N)) {
+        g_line_log_head = 0U;        /* 上电后 RAM 是随机值：清头部；复位后 magic 还在，保留上次记录 */
+        g_line_log_count = 0U;
+        g_line_log_stop = 0U;
+        g_line_rec.magic = LINE_LOG_MAGIC;
+    }
 
     while (1) {
         uint32_t now = HAL_GetTick();
@@ -309,6 +363,7 @@ static void run_dbg_line_only(void)
         if (ev == KEY_EVT_SHORT) {
             if (running != 0U) {
                 running = 0U;
+                g_line_log_stop = 1U;
                 BspMotor_Stop();
                 Board_LedSetPattern(LED_PAT_SLOW_BLINK);
             } else if (!BspMotor_GetState()->enc_online) {
@@ -318,6 +373,9 @@ static void run_dbg_line_only(void)
                 BspMotor_ClearFault();
                 Motion_ResetLinePid();
                 BspGray_ResetTrack();          /* 与比赛起跑一致：不沿用停车前的灰度历史 */
+                g_line_log_head = 0U;
+                g_line_log_count = 0U;
+                g_line_log_stop = 0U;
                 running = 1U;
                 Board_LedSetPattern(LED_PAT_FAST_BLINK);
             }
@@ -328,9 +386,11 @@ static void run_dbg_line_only(void)
         if ((uint32_t)(now - last_ctrl) >= CFG_MAIN_CTRL_PERIOD_MS) {
             float dt = (float)(now - last_ctrl) * 0.001f;
             last_ctrl = now;
+            const uint8_t was_running = running;
             if (running != 0U) {
                 if (BspMotor_HasFault()) {
                     running = 0U;
+                    g_line_log_stop = 3U;
                     BspMotor_Stop();
                     Board_LedSetPattern(LED_PAT_FAULT_BLINK);
                 } else {
@@ -340,6 +400,7 @@ static void run_dbg_line_only(void)
                     if ((Motion_GetLineLostMm() > CFG_LINE_LOST_MAX_MM) ||
                         (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)) {
                         running = 0U;
+                        g_line_log_stop = 2U;
                         BspMotor_Stop();
                         Board_LedSetPattern(LED_PAT_FAULT_BLINK);
                     }
@@ -348,6 +409,9 @@ static void run_dbg_line_only(void)
                 BspGray_Sample(bias);
             }
             BspMotor_ControlStep(now, dt);
+            if (was_running != 0U) {
+                line_log_put(now);             /* 停车那一拍也记上，之后冻结到下次起跑 */
+            }
             if (running != 0U) {
                 /* USART6 日志（PC6，115200），每 20 ms 一行：
                  * 毫秒, 误差×100, 左目标, 右目标, M1..M4 实测 (mm/s)。阻塞发送约 4 ms，只在本调试模式用 */
