@@ -149,6 +149,7 @@ static float g_drag_v = 0.0f;
 static double g_pos[4];         /* 实际轮行程 mm */
 static int32_t g_raw_out[4];    /* 回传的累计计数 */
 static bool  g_enc_frozen = false;
+static bool  g_enc_silent = false;  /* 驱动板一帧 $MAll 都不回 */
 static float g_load = 1.0f;     /* 负载系数：越小轮子越难转 */
 static int   g_pwm_frames = 0;
 static const int k_sign[4] = { CFG_ENC_SIGN_M1, CFG_ENC_SIGN_M2, CFG_ENC_SIGN_M3, CFG_ENC_SIGN_M4 };
@@ -178,7 +179,7 @@ static void motor_world_1ms(void)
             g_raw_out[i] = (int32_t)lround(g_pos[i] * CFG_ENC_COUNTS_PER_MM) * k_sign[i];
         }
     }
-    if ((g_now % 10U) == 0U) {
+    if (((g_now % 10U) == 0U) && !g_enc_silent) {
         char f[64];
         snprintf(f, sizeof f, "$MAll:%ld,%ld,%ld,%ld#", (long)g_raw_out[0], (long)g_raw_out[1],
                  (long)g_raw_out[2], (long)g_raw_out[3]);
@@ -319,7 +320,7 @@ static void sim_reset_world(void)
     memset(g_pos, 0, sizeof g_pos);
     memset(g_raw_out, 0, sizeof g_raw_out);
     memset(g_cam_cmd_count, 0, sizeof g_cam_cmd_count);
-    g_enc_frozen = false; g_load = 1.0f; g_line = true; g_obstacle = false; g_sonar_ok = true;
+    g_enc_frozen = false; g_enc_silent = false; g_load = 1.0f; g_line = true; g_obstacle = false; g_sonar_ok = true;
     g_cam_turn_answer = 0; g_cam_park_aligned = false;
     g_cam_order[0] = '\0'; g_cam_last_seed[0] = '\0';
     g_gray_scripted = false;
@@ -1193,6 +1194,94 @@ static void case_spikes(void)
     BspMotor_Stop();
 }
 
+/* 24. 审查问题复现：低速找线冻结、从无反馈、开环绕故障、斜入路口保持、整片黑回线 */
+static void case_review_1125(void)
+{
+    printf("\n== 24 审查问题\n");
+
+    /* P1-1 找库段线从中间消失，四轮目标 40 mm/s（低于 STALL_MIN_TGT），计数冻结也要报 ENC_STALL */
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(4);                                   /* 从找库段起跑 */
+    run_ms(600);
+    check(Mission_GetState() == ST_PARK_SEARCH, "正在找库（%s）", Mission_GetStateName());
+    sim_gray("00000000");
+    run_ms(200);
+    float tgt0 = BspMotor_GetState()->target_spd_mm_s[0];
+    check(fabsf(tgt0) < CFG_STALL_MIN_TGT_MM_S, "找线目标 %.0f mm/s，低于堵转门槛 %.0f", tgt0, CFG_STALL_MIN_TGT_MM_S);
+    g_enc_frozen = true;
+    uint32_t t0 = g_now;
+    bool faulted = wait_state(ST_FAULT, 5000U);
+    check(faulted && strcmp(Mission_GetFaultReason(), "ENC_STALL") == 0,
+          "低速找线时冻结报 ENC_STALL（%s），用时 %lu ms", Mission_GetFaultReason(), (unsigned long)(g_now - t0));
+    run_ms(300);
+    check(all_pwm_zero(), "电机指令已归零");
+
+    /* P1-2 上电起一帧反馈都没有，开环调试给 PWM：300 ms 后也要急停 */
+    sim_reset_world();
+    g_enc_silent = true;
+    run_ms(100);
+    BspMotor_SetRawPwm(750, 0, 0, 0);
+    run_ms(1000);
+    check(BspMotor_GetState()->rx_timeout_fault && all_pwm_zero(),
+          "从没收到反馈也报超时并归零（fault=%d，M1 PWM %d）", (int)BspMotor_GetState()->rx_timeout_fault, g_pwm[0]);
+    BspMotor_ClearFault();
+    BspMotor_Stop();
+
+    /* P1-3 故障已锁存时，开环指令不能发非零帧 */
+    sim_reset_world();
+    run_ms(200);
+    BspMotor_SetDiffSpeed(100.0f, 100.0f);
+    run_ms(300);
+    g_enc_silent = true;                              /* 反馈中断 → 超时急停 */
+    run_ms(600);
+    check(BspMotor_HasFault(), "反馈中断后故障锁存");
+    int frames0 = g_pwm_frames;
+    BspMotor_SetRawPwm(750, 0, 0, 0);
+    check(g_pwm[0] == 0 && g_pwm_frames > frames0, "故障时开环 750 只发出零帧（M1 PWM %d）", g_pwm[0]);
+    BspMotor_ClearFault();
+    BspMotor_Stop();
+
+    /* P2-4 横线进来时先和主线连成 4 路，这一帧的误差被拉偏，不能被路口保持下去 */
+    sim_reset_world();
+    Motion_ResetLinePid();
+    for (int i = 0; i < 5; ++i) { (void)line_step_diff("00011000"); }
+    (void)line_step_diff("00011110");                 /* 4 路：横线正在进来 */
+    float dc = 0.0f;
+    for (int i = 0; i < 3; ++i) { dc = line_step_diff("00011111"); }
+    check(fabsf(dc) < 0.5f * CFG_LINE_PID_KP, "主线居中斜入 T 字，路口保持差速 %.0f（未被支线拉偏）", dc);
+
+    /* P2-4 报告原样：只有最右探头压线（+3.5）后整排压黑，保持值限幅，右轮不反转 */
+    Motion_ResetLinePid();
+    for (int i = 0; i < 3; ++i) { (void)line_step_diff("00000001"); }
+    for (int i = 0; i < 4; ++i) { (void)line_step_diff("11111111"); }
+    const motor_state_t *m = BspMotor_GetState();
+    float l = 0.5f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1]);
+    float r = 0.5f * (m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    check(r > 0.0f && fabsf(g_gray.error) <= CFG_GRAY_CROSS_HOLD_MAX_ERR + 0.01f,
+          "整排压黑时保持误差 %.2f，左/右目标 %.0f / %.0f，右轮不反转", g_gray.error, l, r);
+    BspMotor_Stop();
+
+    /* P2-5 避障回线时一直是整片黑：不能当成回到线上 */
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(1);
+    run_ms(800);
+    g_obstacle = true;
+    check(wait_state(ST_AVOID_OBS, 1000U), "看到障碍进入避障");
+    g_obstacle = false;
+    sim_gray("11111111");
+    bool passed = false;
+    for (uint32_t t = 0U; (t < 20000U) && (Mission_GetState() == ST_AVOID_OBS); t += 20U) {
+        run_ms(20);
+    }
+    passed = (Mission_GetState() == ST_FORK_PASS);
+    check(!passed && strcmp(Mission_GetFaultReason(), "REJOIN_FAIL") == 0,
+          "整片黑不算回线，报 REJOIN_FAIL（%s / %s）", Mission_GetStateName(), Mission_GetFaultReason());
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -1219,6 +1308,7 @@ int main(void)
     case_rejoin_reset();
     case_lost_smooth();
     case_spikes();
+    case_review_1125();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

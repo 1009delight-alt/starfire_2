@@ -54,7 +54,7 @@ MUTS = {
     "16 丢线不按转角停": [("App/mission_fsm.c", r"|| (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)", r"")],
     "15 视觉任务不下发": [("App/mission_fsm.c", r"if (BspOpenmv_GetState()->target_task != task) {", r"if (0) {")],
     # 2026-11-24 路口直行、P 变增益
-    "17 路口不保持误差": [("Bsp/gray_logic.c", r"    if (cross_cand) {", r"    if (0) {")],
+    "17 路口不保持误差": [("Bsp/gray_logic.c", r"    if (cross_cand || wide) {", r"    if (0) {")],
     "17 分岔误判路口": [("Bsp/gray_logic.c", r"(black_cnt >= CFG_GRAY_CROSS_MIN_BLACK) && (clusters == 1U);", r"(black_cnt >= CFG_GRAY_CROSS_MIN_BLACK);")],
     "17 多段取全部平均": [("Bsp/gray_logic.c", r"if ((mode == GRAY_BIAS_CENTER) && (clusters >= 2U)) {", r"if (0) {")],
     # “18 P 不变增益”（改回线性 P）在 CENTER=1、EDGE=0 时与原码等价、抓不到，变增益重新启用后再加回：
@@ -70,8 +70,15 @@ MUTS = {
     "23 死区补偿过零硬切换": [("Bsp/bsp_motor.c", r"float dead = (float)CFG_WHEEL_PWM_DEADZONE * clampf(tgt / CFG_WHEEL_DEAD_RAMP_MM_S, -1.0f, 1.0f);", r"float dead = (tgt > 0.0f) ? (float)CFG_WHEEL_PWM_DEADZONE : -(float)CFG_WHEEL_PWM_DEADZONE;")],
     "23 目标速度不限加速度": [("Bsp/bsp_motor.c", r"s_cmd_spd[i] += clampf(tgt - s_cmd_spd[i], -dv_max, dv_max);", r"s_cmd_spd[i] = tgt;")],
     "23 停车不清限速目标": [("Bsp/bsp_motor.c", r"""        s_cmd_spd[i] = 0.0f;
-        s_pid_integ[i] = 0.0f;""", r"""        s_pid_integ[i] = 0.0f;""")],
+        s_last_pwm[i] = 0;""", r"""        s_last_pwm[i] = 0;""")],
     "23 换来源时仍算微分": [("App/motion_ctrl.c", r"float d_raw = (s_line_have_prev && !src_switch)", r"float d_raw = (s_line_have_prev)")],
+    "24 堵转只看目标速度": [("Bsp/bsp_motor.c", r"(abs((int)s_last_pwm[i]) >= CFG_WHEEL_PWM_DEADZONE)", r"(0)")],
+    "24 从无反馈不超时": [("Bsp/bsp_motor.c", r"} else if ((s_driving != 0U) && ((uint32_t)(now_ms - s_drive_start_ms) > CFG_MOTOR_RX_TIMEOUT_MS)) {", r"} else if (0) {")],
+    "24 开环绕过故障": [("Bsp/bsp_motor.c", r"} else if (BspMotor_HasFault()) {", r"} else if (0) {")],
+    "24 宽线照常算误差": [("Bsp/gray_logic.c", r"const bool wide = (clusters == 1U) && (black_cnt > CFG_GRAY_LINE_MAX_BLACK);", r"const bool wide = false;")],
+    "24 路口保持不限幅": [("Bsp/gray_logic.c", r"if (h > CFG_GRAY_CROSS_HOLD_MAX_ERR) { h = CFG_GRAY_CROSS_HOLD_MAX_ERR; }", r"")],
+    "24 回线不看线宽": [("App/mission_fsm.c", r"g->line_found && narrow &&", r"g->line_found &&")],
+    "24 进出保持仍算微分": [("App/motion_ctrl.c", r"(s_line_prev_cross != g->held);", r"false;")],
     "22 丢线误差一步到边界": [("Bsp/gray_logic.c", r"st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);", r"st->error = target;")],
 }
 

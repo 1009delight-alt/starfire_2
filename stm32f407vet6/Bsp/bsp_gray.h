@@ -21,6 +21,7 @@ typedef struct {
     uint8_t  live_bits;     /* 上一帧好通道的黑白（不含坏通道补线），做回差用 */
     uint8_t  white_frames;  /* 连续全白帧数（丢线确认） */
     uint8_t  cross_frames;  /* 连续路口候选帧数（路口确认） */
+    bool     held;          /* 本帧误差是保持值（路口候选或比正常线宽），不是实测 */
     float    error;         /* 当前误差 (-3.5 ~ +3.5，负=线在左需左转，正=线在右需右转) */
     float    last_valid_err;/* 最近一次有效误差（丢线方向记忆） */
 } gray_state_t;

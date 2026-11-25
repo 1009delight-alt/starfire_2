@@ -311,6 +311,9 @@ static void run_dbg_line_only(void)
                 running = 0U;
                 BspMotor_Stop();
                 Board_LedSetPattern(LED_PAT_SLOW_BLINK);
+            } else if (!BspMotor_GetState()->enc_online) {
+                /* 没收到编码器反馈不许起跑：闭环、堵转和丢线保护全靠计数 */
+                Board_LedSetPattern(LED_PAT_FAULT_BLINK);
             } else {
                 BspMotor_ClearFault();
                 Motion_ResetLinePid();
@@ -332,6 +335,13 @@ static void run_dbg_line_only(void)
                 } else {
                     /* 2026-11-22 临时：调试先用一半巡航速度，循迹稳了再改回 CFG_SPEED_CRUISE_MM_S */
                     Motion_LineFollowStep(CFG_SPEED_CRUISE_MM_S * 0.5f, bias, dt);
+                    /* 与比赛状态机同样的丢线保护：找线超距离或超转角就停车，短按可重新起跑 */
+                    if ((Motion_GetLineLostMm() > CFG_LINE_LOST_MAX_MM) ||
+                        (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)) {
+                        running = 0U;
+                        BspMotor_Stop();
+                        Board_LedSetPattern(LED_PAT_FAULT_BLINK);
+                    }
                 }
             } else {
                 BspGray_Sample(bias);

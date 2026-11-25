@@ -18,6 +18,8 @@ static float    s_pid_integ[4];
 static float    s_pid_prev_err[4];
 static float    s_pid_prev_tgt[4];      /* 上一周期目标，用来发现正反转切换 */
 static float    s_cmd_spd[4];           /* 限加速度后实际送进轮速环的目标 (mm/s)，停车时清零 */
+static int16_t  s_last_pwm[4];          /* 上一拍闭环实际输出的 PWM，堵转检测用 */
+static uint32_t s_drive_start_ms = 0U;  /* 本次从停止进入运动的时刻，从没收到反馈时按它判超时 */
 static uint8_t  s_raw_pwm_mode = 0U;
 static int16_t  s_raw_pwm_cmd[4];
 static uint8_t  s_driving = 0U;
@@ -147,6 +149,7 @@ void BspMotor_Init(void)
     memset(s_pid_integ, 0, sizeof(s_pid_integ));
     memset(s_pid_prev_err, 0, sizeof(s_pid_prev_err));
     memset(s_cmd_spd, 0, sizeof(s_cmd_spd));
+    memset(s_last_pwm, 0, sizeof(s_last_pwm));
     s_have_base = 0U;
     s_raw_pwm_mode = 0U;
     s_driving = 0U;
@@ -194,6 +197,10 @@ void BspMotor_PollRx(uint32_t now_ms)
                 BspMotor_EmergencyStop();
             }
         }
+    } else if ((s_driving != 0U) && ((uint32_t)(now_ms - s_drive_start_ms) > CFG_MOTOR_RX_TIMEOUT_MS)) {
+        /* 上电起一帧反馈都没收到就在动（调试模式没有起跑检查）：从开始运动起算超时 */
+        s_mot.rx_timeout_fault = true;
+        BspMotor_EmergencyStop();
     }
 
     /* 离线时周期补发 $upload:1,0,0#，兼容驱动板比主控晚通电 */
@@ -238,8 +245,11 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
     if ((s_driving != 0U) && (s_raw_pwm_mode == 0U) && !s_mot.enc_stall_fault) {
         uint32_t dt_ms = (uint32_t)(dt_s * 1000.0f + 0.5f);
         for (int i = 0; i < 4; ++i) {
-            if ((fabsf(s_mot.target_spd_mm_s[i]) >= CFG_STALL_MIN_TGT_MM_S) &&
-                (fabsf(s_mot.wheel_spd_mm_s[i]) < CFG_STALL_MAX_SPD_MM_S)) {
+            /* 目标够大，或上一拍实际输出已达起步死区（低速找线时目标只有 35~48 mm/s，低于
+             * MIN_TGT，计数冻结时积分会把 PWM 顶到 1700 以上），轮子却不动，都算堵转 */
+            bool pushing = (fabsf(s_mot.target_spd_mm_s[i]) >= CFG_STALL_MIN_TGT_MM_S) ||
+                           (abs((int)s_last_pwm[i]) >= CFG_WHEEL_PWM_DEADZONE);
+            if (pushing && (fabsf(s_mot.wheel_spd_mm_s[i]) < CFG_STALL_MAX_SPD_MM_S)) {
                 s_stall_ms[i] += dt_ms;
                 if (s_stall_ms[i] >= CFG_STALL_MS) {
                     s_mot.enc_stall_fault = true;
@@ -319,6 +329,7 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
 
         pwm_out[i] = clamp_i16((int32_t)lroundf(u), -CFG_WHEEL_PWM_MAX, CFG_WHEEL_PWM_MAX);
     }
+    for (int i = 0; i < 4; ++i) { s_last_pwm[i] = pwm_out[i]; }
     send_pwm_frame(pwm_out[0], pwm_out[1], pwm_out[2], pwm_out[3]);
 #endif
 }
@@ -333,6 +344,7 @@ void BspMotor_SetWheelSpeed(float m1, float m2, float m3, float m4)
     if ((fabsf(m1) < 1.0f) && (fabsf(m2) < 1.0f) && (fabsf(m3) < 1.0f) && (fabsf(m4) < 1.0f)) {
         BspMotor_Stop();
     } else {
+        if (s_driving == 0U) { s_drive_start_ms = HAL_GetTick(); }
         s_driving = 1U;
     }
 }
@@ -351,7 +363,11 @@ void BspMotor_SetRawPwm(int16_t m1, int16_t m2, int16_t m3, int16_t m4)
     s_raw_pwm_cmd[3] = clamp_i16(m4, -CFG_WHEEL_PWM_MAX, CFG_WHEEL_PWM_MAX);
     if ((m1 == 0) && (m2 == 0) && (m3 == 0) && (m4 == 0)) {
         BspMotor_Stop();
+    } else if (BspMotor_HasFault()) {
+        /* 故障已锁存：开环指令也不能发非零帧（闭环路径在 ControlStep 里同样只发零） */
+        BspMotor_Stop();
     } else {
+        if (s_driving == 0U) { s_drive_start_ms = HAL_GetTick(); }
         s_driving = 1U;
         send_pwm_frame(s_raw_pwm_cmd[0], s_raw_pwm_cmd[1], s_raw_pwm_cmd[2], s_raw_pwm_cmd[3]);
     }
@@ -364,6 +380,7 @@ void BspMotor_Stop(void)
     for (int i = 0; i < 4; ++i) {
         s_mot.target_spd_mm_s[i] = 0.0f;
         s_cmd_spd[i] = 0.0f;
+        s_last_pwm[i] = 0;
         s_pid_integ[i] = 0.0f;
         s_pid_prev_err[i] = 0.0f;
         s_raw_pwm_cmd[i] = 0;

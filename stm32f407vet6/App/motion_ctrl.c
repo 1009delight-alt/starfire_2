@@ -11,7 +11,7 @@ static float s_line_prev_err = 0.0f;
 static float s_line_d_filt = 0.0f;      /* 低通后的微分项（单位：每 20 ms 的误差变化） */
 static bool  s_line_have_prev = false;  /* 复位后第一拍没有上一拍误差，不算微分，免得起步突跳 */
 static bool  s_line_prev_found = true;  /* 上一拍灰度是否有线，用来发现“找回线”那一拍 */
-static bool  s_line_prev_cross = false; /* 上一拍是否在路口保持中，用来发现保持结束那一拍 */
+static bool  s_line_prev_cross = false; /* 上一拍误差是否为保持值（gray_state_t.held），用来发现进入/结束保持那一拍 */
 static bool  s_line_lost = false;
 static float s_lost_start_mm = 0.0f;    /* 本次丢线开始时的总里程 */
 static float s_lost_mm = 0.0f;          /* 本次连续丢线已行驶的距离 */
@@ -117,12 +117,12 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
     s_line_integ = clampf(s_line_integ + err * dt_s, -2.0f, 2.0f);
     /* 8 路灰度的误差是一格 0.5 地跳，直接差分会把每次跳格放大成一个尖峰（直道高频抖），
      * 所以微分先做一阶低通。单位折算成“每 20 ms 的误差变化”，KD 的含义与控制周期无关 */
-    /* 误差来源切换的那一拍不算微分：丢线后找回（找线误差 ±3.8 → 实测）、路口保持结束（保持值 → 实测）
-     * 时误差是换了来源而不是车在快速偏离，差分会冒出一个假尖峰 */
+    /* 误差来源切换的那一拍不算微分：丢线后找回（找线误差 ±3.8 → 实测）、进入或结束保持
+     * （实测 ↔ 限幅后的保持值）时误差是换了来源而不是车在快速偏离，差分会冒出一个假尖峰 */
     const bool src_switch = (g->line_found && !s_line_prev_found) ||
-                            (s_line_prev_cross && (g->cross_frames == 0U));
+                            (s_line_prev_cross != g->held);
     s_line_prev_found = g->line_found;
-    s_line_prev_cross = (g->cross_frames > 0U);
+    s_line_prev_cross = g->held;
     float d_raw = (s_line_have_prev && !src_switch) ? ((err - s_line_prev_err) / dt_s * 0.02f) : 0.0f;
     s_line_have_prev = true;
     s_line_prev_err = err;

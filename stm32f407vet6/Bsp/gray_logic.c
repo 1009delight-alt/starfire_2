@@ -73,6 +73,7 @@ void GrayLogic_ResetTrack(gray_state_t *st)
     st->line_found = false;
     st->is_split = false;
     st->is_cross = false;
+    st->held = false;
     st->error = 0.0f;
     st->last_valid_err = 0.0f;
 }
@@ -147,8 +148,16 @@ void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mod
         st->line_found = false;
     }
 
-    if (cross_cand) {
-        st->error = st->last_valid_err;
+    /* 比正常线宽（1~3 路）还宽的一段：横线正在进来（先和主线连成 4 路，下一帧才到路口门槛），
+     * 这时算出的误差已被支线拉偏，不能拿来转向，也不能记进 last_valid_err 被路口保持下去。
+     * 保持的误差限在 ±CFG_GRAY_CROSS_HOLD_MAX_ERR：路口要直穿，上一拍偏得再大也只带小转向 */
+    const bool wide = (clusters == 1U) && (black_cnt > CFG_GRAY_LINE_MAX_BLACK);
+    st->held = cross_cand || wide;
+    if (cross_cand || wide) {
+        float h = st->last_valid_err;
+        if (h > CFG_GRAY_CROSS_HOLD_MAX_ERR) { h = CFG_GRAY_CROSS_HOLD_MAX_ERR; }
+        if (h < -CFG_GRAY_CROSS_HOLD_MAX_ERR) { h = -CFG_GRAY_CROSS_HOLD_MAX_ERR; }
+        st->error = h;
     } else if (black_cnt > 0U) {
         st->error = compute_cluster_error(bits, bias, st->last_valid_err, clusters);
         st->last_valid_err = st->error;

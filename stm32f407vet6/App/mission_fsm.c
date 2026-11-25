@@ -372,8 +372,10 @@ static void step_avoid_obs(uint32_t now_ms)
     case AVOID_STEP_REJOIN_SEARCH: {
         BspGray_Sample(GRAY_BIAS_CENTER);
         const gray_state_t *g = BspGray_GetState();
-        /* 连续多帧看到线且偏差不大，才算回到原线（文档 6.4） */
-        if ((m->seg_dist_mm > 60.0f) && g->line_found && (fabsf(g->error) <= CFG_REJOIN_MAX_ERR)) {
+        /* 连续多帧看到线且偏差不大，才算回到原线（文档 6.4）。还要是一条正常宽度的窄线：
+         * 整片黑区、斜压横线时压黑路数多，误差只是保持值（复位后为 0），不能算回到线上 */
+        const bool narrow = (g->black_count > 0U) && (g->black_count <= CFG_GRAY_LINE_MAX_BLACK);
+        if ((m->seg_dist_mm > 60.0f) && g->line_found && narrow && (fabsf(g->error) <= CFG_REJOIN_MAX_ERR)) {
             if (s_rejoin_hits < 255U) { s_rejoin_hits++; }
         } else {
             s_rejoin_hits = 0U;
