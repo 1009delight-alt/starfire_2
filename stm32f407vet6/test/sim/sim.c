@@ -1282,6 +1282,211 @@ static void case_review_1125(void)
           "整片黑不算回线，报 REJOIN_FAIL（%s / %s）", Mission_GetStateName(), Mission_GetFaultReason());
 }
 
+/* 25. 二次审查：弯里内侧轮慢转不误报堵转；4 路宽线保持也受 80 mm 封顶 */
+static void case_review2_1125(void)
+{
+    printf("\n== 25 二次审查\n");
+
+    /* 基速 140、偏差 +1.5：右轮目标约 −5 mm/s，PWM 过死区后慢转，不是堵转 */
+    sim_reset_world();
+    run_ms(200);
+    float spd = 140.0f * (1.0f - CFG_LINE_SLOW_PER_ERR * 1.5f);
+    float dif = Motion_LinePTerm(1.5f);
+    BspMotor_SetDiffSpeed(spd + dif, spd - dif);
+    float r_tgt = spd - dif;
+    run_ms(5000);
+    check(!BspMotor_HasFault(), "内侧轮目标 %.1f mm/s、实测 %.1f mm/s，5 s 不报堵转（stall_wheel=%u）",
+          r_tgt, BspMotor_GetState()->wheel_spd_mm_s[2], (unsigned)BspMotor_GetState()->stall_wheel);
+    BspMotor_Stop();
+    run_ms(300);
+
+    /* 一直 4 路压黑（没到路口门槛 5 路，但误差在保持）：也要在封顶距离后转丢线、报 LINE_LOST */
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(0);
+    run_ms(500);
+    float d0 = BspMotor_GetState()->total_dist_mm;
+    sim_gray("00111100");
+    bool got = wait_state(ST_FAULT, 8000U);
+    float moved = BspMotor_GetState()->total_dist_mm - d0;
+    check(got && strcmp(Mission_GetFaultReason(), "LINE_LOST") == 0, "一直 4 路宽线最终报 LINE_LOST（%s）",
+          Mission_GetFaultReason());
+    check(moved < CFG_LINE_CROSS_MAX_MM + CFG_LINE_LOST_MAX_MM + 60.0f, "停下前只走了 %.0f mm", moved);
+}
+
+/* 26. 三次审查：回线不认两段分开的线；路口保持第一拍不带进入前的微分 */
+static void case_review3_1125(void)
+{
+    printf("\n== 26 三次审查\n");
+
+    /* 回线时一直看到两段分开的线（两路黑，不连成一段）：不能当成回到主线 */
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(1);
+    run_ms(800);
+    g_obstacle = true;
+    check(wait_state(ST_AVOID_OBS, 1000U), "看到障碍进入避障");
+    g_obstacle = false;
+    sim_gray("00010001");
+    for (uint32_t t = 0U; (t < 20000U) && (Mission_GetState() == ST_AVOID_OBS); t += 20U) {
+        run_ms(20);
+    }
+    check(Mission_GetState() != ST_FORK_PASS && strcmp(Mission_GetFaultReason(), "REJOIN_FAIL") == 0,
+          "两段分开的线不算回线（%s / %s）", Mission_GetStateName(), Mission_GetFaultReason());
+
+    /* 居中 → 最右探头 → 整排黑：进入路口第一拍只有限幅后的 P，内侧轮不反转 */
+    sim_reset_world();
+    Motion_ResetLinePid();
+    for (int i = 0; i < 5; ++i) { (void)line_step_diff("00011000"); }
+    (void)line_step_diff("00000001");
+    float d = line_step_diff("11111111");
+    const motor_state_t *m = BspMotor_GetState();
+    float r = 0.5f * (m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    float p = Motion_LinePTerm(CFG_GRAY_CROSS_HOLD_MAX_ERR);
+    check(fabsf(d - p) < 1.0f && r > 0.0f, "路口第一拍差速 %.1f（应只有 P %.1f），右轮目标 %.1f 不反转", d, p, r);
+
+    /* 接着闪一帧全白（还没确认丢线）：沿用保持的限幅误差，不恢复进路口前的 +3.5 */
+    float d3 = line_step_diff("00000000");
+    float r3 = 0.5f * (m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    check(fabsf(g_gray.error - CFG_GRAY_CROSS_HOLD_MAX_ERR) < 0.01f && r3 > 0.0f,
+          "路口后闪白一帧，误差 %.2f、差速 %.1f，右轮目标 %.1f 不反转", g_gray.error, d3, r3);
+    BspMotor_Stop();
+}
+
+/* 从某段起跑一路有线，返回进入目标状态时的总里程（参考跑，用来定位后面的场景） */
+static float ref_enter_dist(int long_presses, mission_state_t st)
+{
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(long_presses);
+    if (!wait_state(st, 60000U)) { return -1.0f; }
+    return BspMotor_GetState()->total_dist_mm;
+}
+
+/* 有线跑到总里程 d 处（超时返回 false） */
+static bool run_until_dist(float d, uint32_t max_ms)
+{
+    for (uint32_t t = 0U; t < max_ms; t += 20U) {
+        if (BspMotor_GetState()->total_dist_mm >= d) { return true; }
+        run_ms(20);
+    }
+    return false;
+}
+
+/* 27. 四次审查：宽线夹单帧白不绕过封顶；跨赛段持续丢线不重算；丢线时不按 P 牌/里程入库 */
+static void case_review4_1125(void)
+{
+    printf("\n== 27 四次审查\n");
+
+    /* 9 帧四路黑 + 1 帧全白循环：没有重新看到窄线，封顶照样到、最终报 LINE_LOST */
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(0);
+    run_ms(500);
+    float d0 = BspMotor_GetState()->total_dist_mm;
+    for (uint32_t t = 0U; (t < 8000U) && (Mission_GetState() != ST_FAULT); t += 200U) {
+        sim_gray("00111100");
+        run_ms(180);
+        sim_gray("00000000");
+        run_ms(20);
+    }
+    float moved = BspMotor_GetState()->total_dist_mm - d0;
+    check(Mission_GetState() == ST_FAULT && strcmp(Mission_GetFaultReason(), "LINE_LOST") == 0,
+          "宽线夹单帧白最终报 LINE_LOST（%s）", Mission_GetFaultReason());
+    check(moved < CFG_LINE_CROSS_MAX_MM + CFG_LINE_LOST_MAX_MM + 60.0f, "停下前只走了 %.0f mm", moved);
+
+    /* 色块段末尾开始全白，跨进找库段：丢线距离接着算，不从 0 重来 */
+    float d_park = ref_enter_dist(3, ST_PARK_SEARCH);
+    check(d_park > 0.0f, "参考跑：色块段 → 找库段在 %.0f mm", d_park);
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(3);
+    run_until_dist(d_park - 150.0f, 60000U);
+    check(Mission_GetState() == ST_COLOR_SCAN, "全白前仍在色块段（%s）", Mission_GetStateName());
+    float dw = BspMotor_GetState()->total_dist_mm;
+    sim_gray("00000000");
+    bool crossed = false;
+    for (uint32_t t = 0U; (t < 30000U) && (Mission_GetState() != ST_FAULT); t += 20U) {
+        run_ms(20);
+        if (Mission_GetState() == ST_PARK_SEARCH) { crossed = true; }
+    }
+    moved = BspMotor_GetState()->total_dist_mm - dw;
+    check(crossed, "丢线途中切进了找库段");
+    check(strcmp(Mission_GetFaultReason(), "LINE_LOST") == 0 && moved < CFG_LINE_LOST_MAX_MM + 40.0f,
+          "跨段丢线按首次全白起算报 LINE_LOST，走了 %.0f mm（%s）", moved, Mission_GetFaultReason());
+
+    /* 找库段：里程兜底点前 150 mm 开始全白，不给 P 牌：不能在丢线状态下入库 */
+    float d_fb = ref_enter_dist(4, ST_PARK_REVERSE);
+    check(d_fb > 0.0f, "参考跑：里程兜底入库在 %.0f mm", d_fb);
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(4);
+    run_until_dist(d_fb - 150.0f, 60000U);
+    sim_gray("00000000");
+    bool parked = false;
+    for (uint32_t t = 0U; (t < 30000U) && (Mission_GetState() != ST_FAULT); t += 20U) {
+        run_ms(20);
+        if (Mission_GetState() == ST_PARK_REVERSE) { parked = true; break; }
+    }
+    check(!parked && strcmp(Mission_GetFaultReason(), "LINE_LOST") == 0,
+          "丢线时不按里程入库，最终报 LINE_LOST（%s / %s）", Mission_GetStateName(), Mission_GetFaultReason());
+
+    /* 兜底点附近短暂丢线、随后找回：找回后照常入库 */
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(4);
+    run_until_dist(d_fb - 20.0f, 60000U);
+    sim_gray("00000000");
+    parked = false;
+    for (uint32_t t = 0U; t < 2000U; t += 20U) {
+        run_ms(20);
+        if (Mission_GetState() == ST_PARK_REVERSE) { parked = true; }
+    }
+    float past = BspMotor_GetState()->total_dist_mm - d_fb;
+    check(!parked && past > 0.0f, "丢线中越过兜底点 %.0f mm 也不入库", past);
+    sim_gray("00011000");
+    check(wait_state(ST_PARK_REVERSE, 2000U), "找回线后照常入库（%s）", Mission_GetStateName());
+}
+
+/* 28. 急停后重跑：第一拍不沿用上一轮的灰度方向 */
+static void case_restart_gray(void)
+{
+    printf("\n== 28 急停重跑清灰度\n");
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00000001");                             /* 线在最右，误差 +3.5 */
+    start_stage(0);
+    run_ms(300);
+    g_estop = true;
+    run_ms(40);
+    g_estop = false;
+    check(Mission_GetState() == ST_FAULT, "按键急停");
+    key(KEY_EVT_LONG);
+    check(Mission_GetState() == ST_IDLE, "回到待机");
+    sim_gray("00000000");                             /* 放到全白处重跑 */
+    g_key_ev = KEY_EVT_SHORT;
+    g_key_press_ms = g_now;
+    run_to_before_step();
+    run_ms(1);                                        /* 起跑那一拍 */
+    run_ms(20);                                       /* 第一拍循迹 */
+    const motor_state_t *m = BspMotor_GetState();
+    float l = 0.5f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1]);
+    float r = 0.5f * (m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+    check(Mission_GetState() == ST_TRACK_TO_OBS, "已重新起跑（%s）", Mission_GetStateName());
+    check(!g_gray.line_found && fabsf(l - r) < 1.0f,
+          "全白第一拍不算有线、不转向（误差 %.2f，左/右 %.1f / %.1f）", g_gray.error, l, r);
+    g_estop = true;
+    run_ms(40);
+    g_estop = false;
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -1309,6 +1514,10 @@ int main(void)
     case_lost_smooth();
     case_spikes();
     case_review_1125();
+    case_review2_1125();
+    case_review3_1125();
+    case_review4_1125();
+    case_restart_gray();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

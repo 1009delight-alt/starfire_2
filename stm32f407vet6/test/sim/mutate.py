@@ -79,6 +79,21 @@ MUTS = {
     "24 路口保持不限幅": [("Bsp/gray_logic.c", r"if (h > CFG_GRAY_CROSS_HOLD_MAX_ERR) { h = CFG_GRAY_CROSS_HOLD_MAX_ERR; }", r"")],
     "24 回线不看线宽": [("App/mission_fsm.c", r"g->line_found && narrow &&", r"g->line_found &&")],
     "24 进出保持仍算微分": [("App/motion_ctrl.c", r"(s_line_prev_cross != g->held);", r"false;")],
+    "25 按 PWM 判堵转不看目标": [("Bsp/bsp_motor.c", r"((atgt >= CFG_STALL_LOW_TGT_MM_S) &&", r"((1) &&")],
+    "25 宽线保持不封顶": [("App/motion_ctrl.c", r"""    if (g->held) {
+        if (!s_in_cross) {""", r"""    if (g->cross_frames > 0U) {
+        if (!s_in_cross) {""")],
+    "26 回线不看分段": [("App/mission_fsm.c", r"(g->black_count <= CFG_GRAY_LINE_MAX_BLACK) && !g->is_split;", r"(g->black_count <= CFG_GRAY_LINE_MAX_BLACK);")],
+    "26 保持时仍带微分": [("App/motion_ctrl.c", r"        s_line_d_filt = 0.0f;", r"        (void)0;")],
+    "27 单帧白清封顶起点": [("App/motion_ctrl.c", r"    } else if (g->black_count > 0U) {", r"    } else {")],
+    "27 跨赛段复位丢线统计": [("App/mission_fsm.c", r"    if (!keep_line) {", r"    if (1) {")],
+    "27 丢线时也入库": [("App/mission_fsm.c", r"if ((p_aligned || odom_fallback) && !Motion_IsLineLost()) {", r"if (p_aligned || odom_fallback) {")],
+    "26 闪白恢复未限幅误差": [("Bsp/gray_logic.c", r"""会把限幅撤掉、内侧轮突然反转 */
+        (void)0;""", r"""会把限幅撤掉、内侧轮突然反转 */
+        st->error = st->last_valid_err;""")],
+    "28 重跑不清灰度": [("App/mission_fsm.c", r"""按旧误差猛转 */
+    BspGray_ResetTrack();""", r"""按旧误差猛转 */
+    (void)0;""")],
     "22 丢线误差一步到边界": [("Bsp/gray_logic.c", r"st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);", r"st->error = target;")],
 }
 
@@ -97,9 +112,15 @@ for name, muts in MUTS.items():
         open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
     exe = os.path.join(work, 'm.exe')
     srcs = [os.path.join(sim, 'sim.c')] + [os.path.join(d, x) for x in SRCS]
-    subprocess.run(['gcc', '-std=c11', '-w', '-O0', '-I', os.path.join(sim, 'stub'),
-                    '-I', os.path.join(d, 'Core', 'Inc'), '-I', os.path.join(d, 'Bsp'),
-                    '-I', os.path.join(d, 'App'), '-o', exe] + srcs + ['-lm'], check=True)
+    cmd = ['gcc', '-std=c11', '-w', '-O0', '-I', os.path.join(sim, 'stub'),
+           '-I', os.path.join(d, 'Core', 'Inc'), '-I', os.path.join(d, 'Bsp'),
+           '-I', os.path.join(d, 'App'), '-o', exe] + srcs + ['-lm']
+    # 本机 gcc 偶发 internal compiler error / 临时文件写失败，与变异无关：重试两次
+    for attempt in range(3):
+        if subprocess.run(cmd).returncode == 0:
+            break
+    else:
+        subprocess.run(cmd, check=True)
     r = subprocess.run([exe], capture_output=True)
     out = r.stdout.decode('utf-8', 'replace').splitlines()
     fails = [l for l in out if l.startswith('FAIL')]

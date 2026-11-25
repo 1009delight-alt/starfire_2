@@ -162,8 +162,9 @@ void GrayLogic_Process(gray_state_t *st, const uint16_t raw_hw[8], gray_bias_mod
         st->error = compute_cluster_error(bits, bias, st->last_valid_err, clusters);
         st->last_valid_err = st->error;
     } else if (st->line_found) {
-        /* 全白但还没确认丢线：误差保持，不急着打满找线 */
-        st->error = st->last_valid_err;
+        /* 全白但还没确认丢线：沿用上一帧输出的误差，不急着打满找线。不能取 last_valid_err：
+         * 路口保持刚结束时它还是进路口前没限幅的值（如 +3.5），会把限幅撤掉、内侧轮突然反转 */
+        (void)0;
     } else {
         /* 丢线时沿上次偏离方向加大纠偏找线。不一步跳到 ±3.8（线从中间消失时会猛转、D 项出尖峰），
          * 每帧按一阶低通往目标靠：err += k·(目标 − err)，起点就是确认帧保持下来的上一拍误差 */

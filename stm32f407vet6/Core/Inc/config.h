@@ -41,6 +41,9 @@
 /* 编码器堵转/冻结检测：某轮目标 >= MIN_TGT 而实测 < MAX_SPD 持续 STALL_MS，报 ENC_STALL 急停。
  * 覆盖“驱动板照常回帧但计数不变”（编码器插头松）和轮子被卡住两种情况 */
 #define CFG_STALL_MIN_TGT_MM_S          60.0f
+/* 目标低于 MIN_TGT 时，PWM 已达起步死区且目标不低于此值才按堵转计时（低速找线 35~48 mm/s 冻结要能抓到；
+ * 弯里内侧轮目标几 mm/s 慢转不能误报）。2026-11-25 新增 */
+#define CFG_STALL_LOW_TGT_MM_S          25.0f
 #define CFG_STALL_MAX_SPD_MM_S          10.0f
 #define CFG_STALL_MS                    600U
 

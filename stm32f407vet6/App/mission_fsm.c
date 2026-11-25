@@ -144,14 +144,24 @@ static bool corner_update(void)
     return false;
 }
 
+static bool is_line_state(mission_state_t st)
+{
+    return (st == ST_TRACK_TO_OBS) || (st == ST_FORK_PASS) || (st == ST_COLOR_SCAN) || (st == ST_PARK_SEARCH);
+}
+
 static void enter_state(mission_state_t next, uint32_t now_ms)
 {
     const motor_state_t *m = BspMotor_GetState();
+    /* 两个循迹赛段之间切换时不复位循迹状态：车一直在同一条线上跑，复位会把丢线距离和转角清零，
+     * 跨段持续丢线时 250 mm / 180° 停车阈值被重新计算。从起跑、避障、入库等进入循迹段时照旧复位 */
+    const bool keep_line = is_line_state(s_state) && is_line_state(next);
     s_state = next;
     s_stage_start_dist_mm = m->total_dist_mm;
     s_step_enter_ms = now_ms;
     s_state_enter_ms = now_ms;
-    Motion_ResetLinePid();
+    if (!keep_line) {
+        Motion_ResetLinePid();
+    }
 
     switch (next) {
     case ST_IDLE:
@@ -285,6 +295,9 @@ static void do_start(uint32_t now_ms)
 {
     BspMotor_ClearFault();
     BspMotor_ResetTotalOdom();
+    /* 待机时不采灰度，状态还是上一轮急停前留下的（有线、误差如 +3.5）。不清的话重跑第一拍
+     * 即使 0 路压黑也算有线，按旧误差猛转 */
+    BspGray_ResetTrack();
 
     if (s_profile == MISSION_PROFILE_AVOID_ONLY) {
         enter_state(ST_TRACK_TO_OBS, now_ms);
@@ -374,7 +387,7 @@ static void step_avoid_obs(uint32_t now_ms)
         const gray_state_t *g = BspGray_GetState();
         /* 连续多帧看到线且偏差不大，才算回到原线（文档 6.4）。还要是一条正常宽度的窄线：
          * 整片黑区、斜压横线时压黑路数多，误差只是保持值（复位后为 0），不能算回到线上 */
-        const bool narrow = (g->black_count > 0U) && (g->black_count <= CFG_GRAY_LINE_MAX_BLACK);
+        const bool narrow = (g->black_count > 0U) && (g->black_count <= CFG_GRAY_LINE_MAX_BLACK) && !g->is_split;
         if ((m->seg_dist_mm > 60.0f) && g->line_found && narrow && (fabsf(g->error) <= CFG_REJOIN_MAX_ERR)) {
             if (s_rejoin_hits < 255U) { s_rejoin_hits++; }
         } else {
@@ -613,7 +626,9 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
             ? ((mot->total_dist_mm - s_corner4_mm) >= CFG_PARK_FALLBACK_MM)
             : ((mot->total_dist_mm - s_color_enter_mm) >= CFG_PARK_FALLBACK_ABS_MM);
 
-        if (p_aligned || odom_fallback) {
+        /* 丢线（含路口保持超距）时车头方向和位置都不可信，不按 P 牌或里程开始入库：继续找线，
+         * 找回后再触发；找不回由 check_line_lost 报 LINE_LOST */
+        if ((p_aligned || odom_fallback) && !Motion_IsLineLost()) {
             s_park_by_odom = !p_aligned;
             BspMotor_Stop();
             enter_state(ST_PARK_REVERSE, now_ms);

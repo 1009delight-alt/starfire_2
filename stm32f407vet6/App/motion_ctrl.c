@@ -97,6 +97,11 @@ float Motion_GetLineLostDeg(void)
     return s_lost_deg;
 }
 
+bool Motion_IsLineLost(void)
+{
+    return s_line_lost;
+}
+
 float Motion_LinePTerm(float err)
 {
     return CFG_LINE_PID_KP * err * (CFG_LINE_KP_CENTER_SCALE + CFG_LINE_KP_EDGE_GAIN * fabsf(err));
@@ -127,6 +132,11 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
     s_line_have_prev = true;
     s_line_prev_err = err;
     s_line_d_filt += CFG_LINE_D_LPF_ALPHA * (d_raw - s_line_d_filt);
+    if (g->held) {
+        /* 误差在保持（路口、横线进入）：要直穿，不带微分。低通里还留着进入前那几拍的变化
+         * （例如横线先压到最右探头时的跳变），不清掉会让内侧轮在路口第一拍反转 */
+        s_line_d_filt = 0.0f;
+    }
 
     /* P 项中间软、两边硬：直道小偏差不来回摆，弯里大偏差给足差速（见 config.h） */
     float diff = Motion_LinePTerm(err) +
@@ -145,12 +155,15 @@ void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, fl
     /* 路口保持封顶：压黑够多时灰度保持上一拍误差直行，真横线只压几十毫米。连续“路口”超过
      * CFG_LINE_CROSS_MAX_MM 说明不是路口（阈值设错整排判黑、开进大片黑区），按丢线处理，
      * 好让 LINE_LOST 能停车；否则 line_found 一直为真，车会一直直行不停 */
-    if (g->cross_frames > 0U) {
+    /* 从误差开始保持的第一帧起算（路口候选，或 4 路宽线：后者不计入 cross_frames，原来能一直保持不封顶） */
+    if (g->held) {
         if (!s_in_cross) {
             s_in_cross = true;
             s_cross_start_mm = m->total_dist_mm;
         }
-    } else {
+    } else if (g->black_count > 0U) {
+        /* 重新看到正常窄线才清起点。未确认丢线的单帧全白不清：宽线里夹一帧白反复出现时，
+         * 原来每次都把起点清掉，封顶永远到不了，丢线也永远不成立 */
         s_in_cross = false;
     }
     const bool flooded = s_in_cross && (fabsf(m->total_dist_mm - s_cross_start_mm) > CFG_LINE_CROSS_MAX_MM);

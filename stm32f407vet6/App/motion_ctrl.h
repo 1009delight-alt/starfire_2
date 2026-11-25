@@ -11,6 +11,7 @@ void Motion_ResetLinePid(void);
 /* 当前连续丢线已行驶的距离 (mm)，找到线后归零 */
 float Motion_GetLineLostMm(void);
 float Motion_GetLineLostDeg(void);     /* 本次连续丢线已转过的角度（绝对值） */
+bool  Motion_IsLineLost(void);         /* 当前处于丢线找线（含路口保持超距），找库入库前要求为假 */
 
 /* 循迹 PID 单步执行（每 20ms 调用一次） */
 void Motion_LineFollowStep(float base_speed_mm_s, gray_bias_mode_t bias_mode, float dt_s);

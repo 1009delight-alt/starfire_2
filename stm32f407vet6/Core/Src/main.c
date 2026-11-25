@@ -317,6 +317,7 @@ static void run_dbg_line_only(void)
             } else {
                 BspMotor_ClearFault();
                 Motion_ResetLinePid();
+                BspGray_ResetTrack();          /* 与比赛起跑一致：不沿用停车前的灰度历史 */
                 running = 1U;
                 Board_LedSetPattern(LED_PAT_FAST_BLINK);
             }

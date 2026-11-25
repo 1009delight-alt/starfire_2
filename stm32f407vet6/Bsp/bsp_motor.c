@@ -246,9 +246,12 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
         uint32_t dt_ms = (uint32_t)(dt_s * 1000.0f + 0.5f);
         for (int i = 0; i < 4; ++i) {
             /* 目标够大，或上一拍实际输出已达起步死区（低速找线时目标只有 35~48 mm/s，低于
-             * MIN_TGT，计数冻结时积分会把 PWM 顶到 1700 以上），轮子却不动，都算堵转 */
-            bool pushing = (fabsf(s_mot.target_spd_mm_s[i]) >= CFG_STALL_MIN_TGT_MM_S) ||
-                           (abs((int)s_last_pwm[i]) >= CFG_WHEEL_PWM_DEADZONE);
+             * MIN_TGT，计数冻结时积分会把 PWM 顶到 1700 以上），轮子却不动，都算堵转。
+             * 后者还要求目标不低于 LOW_TGT：弯里内侧轮目标只有几 mm/s，PWM 过死区后本来就慢转，不是堵转 */
+            const float atgt = fabsf(s_mot.target_spd_mm_s[i]);
+            bool pushing = (atgt >= CFG_STALL_MIN_TGT_MM_S) ||
+                           ((atgt >= CFG_STALL_LOW_TGT_MM_S) &&
+                            (abs((int)s_last_pwm[i]) >= CFG_WHEEL_PWM_DEADZONE));
             if (pushing && (fabsf(s_mot.wheel_spd_mm_s[i]) < CFG_STALL_MAX_SPD_MM_S)) {
                 s_stall_ms[i] += dt_ms;
                 if (s_stall_ms[i] >= CFG_STALL_MS) {
