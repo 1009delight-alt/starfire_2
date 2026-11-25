@@ -103,6 +103,8 @@ MUTS = {
     "31 避障单项回线后停车": [("App/mission_fsm.c", r"""                enter_state(ST_TRACK_TO_OBS, now_ms);
             } else {""", r"""                enter_state(ST_DONE, now_ms);
             } else {""")],
+    "32 整圈起跑不立即避障": [("App/mission_fsm.c", r"gate_ok = !s_after_rejoin || (stage_dist >= 150.0f);", r"gate_ok = (stage_dist >= 150.0f);")],
+    "32 整圈回线后立即避障": [("App/mission_fsm.c", r"gate_ok = !s_after_rejoin || (stage_dist >= 150.0f);", r"gate_ok = true;")],
     "22 丢线误差一步到边界": [("Bsp/gray_logic.c", r"st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);", r"st->error = target;")],
 }
 

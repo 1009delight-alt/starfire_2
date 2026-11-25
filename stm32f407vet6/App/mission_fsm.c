@@ -31,6 +31,8 @@ typedef enum {
 } park_step_t;
 
 static mission_profile_t s_profile = MISSION_PROFILE_FULL;
+static bool              s_after_rejoin = false;   /* 整圈模式：本段循迹是避障回线后进入的 */
+static bool track_loop_profile(void);
 static mission_state_t   s_state   = ST_IDLE;
 static avoid_step_t      s_avoid_step = AVOID_STEP_TURN_OUT;
 static park_step_t       s_park_step  = PARK_STEP_EXTRA_FWD;
@@ -284,11 +286,17 @@ static const char *check_start_ready(uint32_t now_ms)
     }
 #endif
 #if (CFG_REQUIRE_MV_ONLINE_TO_START != 0U) && (CFG_ENABLE_OPENMV != 0U)
-    if ((s_profile != MISSION_PROFILE_AVOID_ONLY) && !mv->online) {
+    if (!track_loop_profile() && !mv->online) {
         return "WAIT:MV";
     }
 #endif
     return NULL;
+}
+
+/* 避障单项、整圈模式：起跑直接循迹，回线后接着循迹，不进分岔/识色/入库 */
+static bool track_loop_profile(void)
+{
+    return (s_profile == MISSION_PROFILE_AVOID_ONLY) || (s_profile == MISSION_PROFILE_LOOP);
 }
 
 static void do_start(uint32_t now_ms)
@@ -299,7 +307,8 @@ static void do_start(uint32_t now_ms)
      * 即使 0 路压黑也算有线，按旧误差猛转 */
     BspGray_ResetTrack();
 
-    if (s_profile == MISSION_PROFILE_AVOID_ONLY) {
+    if (track_loop_profile()) {
+        s_after_rejoin = false;
         enter_state(ST_TRACK_TO_OBS, now_ms);
         return;
     }
@@ -403,8 +412,9 @@ static void step_avoid_obs(uint32_t now_ms)
         }
         if (s_rejoin_hits >= CFG_REJOIN_CONFIRM) {
             BspMotor_Stop();
-            if (s_profile == MISSION_PROFILE_AVOID_ONLY) {
-                /* 避障单项调试：回线后接着循迹，看能否稳稳回到线上（走过 150 mm 后再遇障碍还会再避），
+            if (track_loop_profile()) {
+                s_after_rejoin = true;
+                /* 避障单项、整圈调试：回线后接着循迹，看能否稳稳回到线上（走过 150 mm 后再遇障碍还会再避），
                  * 按 KEY 停车。2026-11-25 用户要求，原来直接进 DONE 停车 */
                 enter_state(ST_TRACK_TO_OBS, now_ms);
             } else {
@@ -562,9 +572,15 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
         if (check_line_lost()) {
             break;
         }
-        bool gate_ok = (s_profile == MISSION_PROFILE_AVOID_ONLY)
-                       ? (stage_dist >= 150.0f)
-                       : (mot->total_dist_mm >= CFG_GATE_OBS_ENABLE_MM);
+        /* 避障门控：比赛按总里程；避障单项起跑后走 150 mm；整圈模式起跑即启用，回线后同样先走 150 mm */
+        bool gate_ok;
+        if (s_profile == MISSION_PROFILE_LOOP) {
+            gate_ok = !s_after_rejoin || (stage_dist >= 150.0f);
+        } else if (s_profile == MISSION_PROFILE_AVOID_ONLY) {
+            gate_ok = (stage_dist >= 150.0f);
+        } else {
+            gate_ok = (mot->total_dist_mm >= CFG_GATE_OBS_ENABLE_MM);
+        }
 #if (CFG_ENABLE_SONAR != 0U)
         /* 避障窗口内超声失效不能当作前方畅通（文档 2 章） */
         if (gate_ok && !BspSonar_IsHealthy(now_ms)) {

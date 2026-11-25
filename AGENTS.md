@@ -56,7 +56,7 @@
 - `CMSIS_PACK_ROOT` 指向工程内的 `.packs/`。
 - 用 PWLink2（CMSIS-DAP）经 pyOCD 下载和调试（`--probe cmsisdap:`，csolution 里的调试器名为 `CMSIS-DAP@pyOCD`），SWD 频率 1 MHz。2026-11-23 由 ST-Link V2 改来。相关任务和调试配置在 `.vscode/tasks.json` 和 `.vscode/launch.json`，例如 `CMSIS Load`。
 - 改代码后要做三件事：
-  1. 把 9 个 `APP_RUN_MODE` 逐个编译一遍。各模式用 `#if` 隔开，只编比赛模式查不出其他模式的错误。
+  1. 把 10 个 `APP_RUN_MODE` 逐个编译一遍。各模式用 `#if` 隔开，只编比赛模式查不出其他模式的错误。
   2. 跑主控状态机回放：在 `stm32f407vet6/` 下执行 `.\test\sim\run_sim.ps1`（需要主机 gcc，本机在 `C:\msys64\ucrt64\bin`）。它用 gcc 编译真实的 `mission_fsm.c`、`motion_ctrl.c`、`bsp_motor.c`、`bsp_openmv.c`、`gray_logic.c`、`sonar_logic.c`，外设换成 `test/sim/sim.c` 里的模拟件，按 1 ms 推进时钟。新的跨周期行为要在 `sim.c` 里加用例；新增被测源文件要同时加进 `run_sim.ps1`。加了修复或用例后，再跑 `python -I stm32f407vet6/test/sim/mutate.py` 做变异检查（把修复逐一撤回或写反，确认用例能抓到），新修复要在其中的 `MUTS` 里登记。
   3. 改了相机脚本时，跑 `python -I openmv4h7plus/test/test_main_pc.py`。
   4. 改了显示驱动或页面（`Bsp/bsp_oled.c`、`App/ui_pages.c`）时，在 `stm32f407vet6/` 下跑 `.\test\ui\run_ui.ps1`，再打开 `test/ui/out/pages.png` 看一遍。它用 gcc 编译真实的驱动和页面代码，把 SPI 字节流交给一个简化的 ST7735 模拟器，渲染出比赛页和 6 个调试页。同时检查三件事：每次 `FlushStep` 最多发一条带；内容不变时不重发；改一个数字只重发受影响的条带。新增页面要同时加进 `test/ui/render.c`。
@@ -92,6 +92,7 @@
 - 2026-11-25 更正：用户确认上次避障实车是**向左**转出（程序指令为右转）。原地转向只用电机和编码器、不经过灰度，说明电机本来接对、`CFG_MOTOR_SWAP_LR`=1 是错的；反的是灰度左右顺序（11-22 与 11-25 两次扫线都可能是站在车头前看的），两处一起反，循迹正负抵消看起来正常。改为 `CFG_MOTOR_SWAP_LR`=0、`CFG_GRAY_REVERSE_ORDER`=0，坏通道屏蔽跟着改回 `(1U << 6)`。**判断左右一律站在车后、与车头同向看。** 回放里三条用例的灰度图样压在新的坏通道上，改为左右镜像图样；mutate.py 的“29 不做左右换算”在开关为 0 时等价，已注释。回放 170/170；变异检查 62 处全部被抓到；已下载 `DBG_AVOID_ONLY`。未上车验证。
 - 2026-11-25：更正后实车避障向右绕，用户反馈转出 60° 基本准，两段斜行中间那次 120° 大转向多转约 20°（记录因跑完断电没读到）。新增 `CFG_AVOID_TURN_BACK_TRIM_DEG`（−20），加在那次转向的指令角度上（指令 100°），只用于两段斜行。回放 170/170（第 30 组按指令角度改写）；第 30 组新增变异“转回不加修正”，均被抓到；9 个模式编译通过，0 错误、0 警告；已下载 `DBG_AVOID_ONLY`。
 - 2026-11-25：修正后实车避障成功（记录 10 s）：224 mm 触发 → 右转 60° → 斜出约 430 mm → 转回 → 斜回约 380 mm 时线从最左探头进入，误差 −3.5→−0.5 连续确认回线，全程无丢线。用户要求避障单项调试回线后不要停：`MISSION_PROFILE_AVOID_ONLY` 回线后进 `ST_TRACK_TO_OBS` 继续循迹（走过 150 mm 后再遇障碍会再避），按 KEY 停车。注意车上记录只留最近 10 s，回线后跑太久会把避障段冲掉。回放 174/174（新增第 31 组）；新增变异被抓到；9 个模式编译通过；已下载 `DBG_AVOID_ONLY`。
+- 2026-11-25：新增 `RUN_MODE_DBG_LOOP`（9）/ `MISSION_PROFILE_LOOP` 整圈调试：比赛速度循迹（280）+ 避障（200），不分赛段、不进分岔/识色/入库，不要求相机在线；起跑即启用避障，避障回线后先走 150 mm 再启用（`s_after_rejoin`），一直跑到按 KEY 或故障。与避障单项共用 `track_loop_profile()`。车上记录照常（最近 10 s）。改代码后的逐个编译现在是 10 个模式。回放 177/177（新增第 32 组）；新增变异均被抓到；10 个模式编译通过，0 错误、0 警告；已下载 `DBG_LOOP`，没有上车。
 
 **添加外设**需要改三处，漏改任何一处都会导致编译或链接失败：
 1. 在 `Core/Inc/stm32f4xx_hal_conf.h` 中启用对应的 `HAL_xxx_MODULE_ENABLED`。
@@ -100,7 +101,7 @@
 
 ### 代码结构
 
-- `Core/Src/main.c`：顶部用 `APP_RUN_MODE` 选择比赛模式或 8 个分步调试模式（2026-11-23 删去云台模式后重新编号，按宏名选，不要写数字）。主循环先做快速轮询（收帧、超声、按键、LED），再每 20 ms 依次执行 `Mission_Step20ms` 和 `BspMotor_ControlStep`，每 120 ms 重画一次屏幕页面（只写帧缓冲）。调试模式的屏幕页面画法放在 `App/ui_pages.c`，`main.c` 只管按键和控制逻辑。
+- `Core/Src/main.c`：顶部用 `APP_RUN_MODE` 选择比赛模式或 9 个分步调试模式（2026-11-23 删去云台模式后重新编号；2026-11-25 新增 `RUN_MODE_DBG_LOOP` 整圈调试，共 10 个模式，按宏名选，不要写数字）。主循环先做快速轮询（收帧、超声、按键、LED），再每 20 ms 依次执行 `Mission_Step20ms` 和 `BspMotor_ControlStep`，每 120 ms 重画一次屏幕页面（只写帧缓冲）。调试模式的屏幕页面画法放在 `App/ui_pages.c`，`main.c` 只管按键和控制逻辑。
 - `Core/Inc/config.h`：集中存放所有可调参数。值都是初稿估值，实测后回填。
 - `Core/Inc/board.h`：引脚定义，必须与装车接线总表一致。
 - `App/mission_fsm.c`：比赛状态机，依次为 IDLE → TRACK_TO_OBS → AVOID_OBS → FORK_PASS → COLOR_SCAN → PARK_SEARCH → PARK_REVERSE → DONE，另有 FAULT。主要行为：

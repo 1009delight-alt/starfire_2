@@ -6,8 +6,9 @@
 
 typedef enum {
     MISSION_PROFILE_FULL = 0,   /* 完整比赛：循迹 -> 避障 -> 分岔 -> 四色 -> 倒车入库 */
-    MISSION_PROFILE_AVOID_ONLY, /* 单项调试：循迹 -> 避障回线 -> 停车 */
-    MISSION_PROFILE_PARK_ONLY   /* 单项调试：循迹寻 P 牌 -> 倒车入库停 5 秒 */
+    MISSION_PROFILE_AVOID_ONLY, /* 单项调试：循迹 -> 避障回线 -> 接着循迹（按 KEY 停） */
+    MISSION_PROFILE_PARK_ONLY,  /* 单项调试：循迹寻 P 牌 -> 倒车入库停 5 秒 */
+    MISSION_PROFILE_LOOP        /* 整圈调试：比赛速度循迹 + 避障，起跑即启用避障，不分赛段，一直跑到按 KEY 或故障 */
 } mission_profile_t;
 
 typedef enum {

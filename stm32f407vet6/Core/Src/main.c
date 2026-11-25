@@ -26,6 +26,7 @@
  *    RUN_MODE_DBG_LINE_ONLY   : 纯循迹 PID 调试（按 KEY 启停，长按切中/左/右偏置）
  *    RUN_MODE_DBG_AVOID_ONLY  : 单项避障绕行与回线测试
  *    RUN_MODE_DBG_PARK_ONLY   : 单项寻 P 牌与倒车入库停 5 秒测试
+ *    RUN_MODE_DBG_LOOP        : 整圈调试：比赛速度循迹 + 避障，起跑即启用避障，不分赛段，按 KEY 停
  * ============================================================================ */
 #define RUN_MODE_RACE               0U
 #define RUN_MODE_DBG_MOTOR_ENC      1U
@@ -36,8 +37,9 @@
 #define RUN_MODE_DBG_LINE_ONLY      6U
 #define RUN_MODE_DBG_AVOID_ONLY     7U
 #define RUN_MODE_DBG_PARK_ONLY      8U
+#define RUN_MODE_DBG_LOOP           9U
 
-#define APP_RUN_MODE               RUN_MODE_DBG_AVOID_ONLY
+#define APP_RUN_MODE               RUN_MODE_DBG_LOOP
 /* 调试辅助变量（Keil / VS Code Watch 窗口可直接观测） */
 volatile uint32_t g_main_loop_ticks = 0U;
 
@@ -388,7 +390,8 @@ static void run_dbg_line_only(void)
 /* ==================== 正式比赛 / 单项全流程入口 ==================== */
 #if (APP_RUN_MODE == RUN_MODE_RACE) || \
     (APP_RUN_MODE == RUN_MODE_DBG_AVOID_ONLY) || \
-    (APP_RUN_MODE == RUN_MODE_DBG_PARK_ONLY)
+    (APP_RUN_MODE == RUN_MODE_DBG_PARK_ONLY) || \
+    (APP_RUN_MODE == RUN_MODE_DBG_LOOP)
 static void run_mission(mission_profile_t profile)
 {
     uint32_t last_ctrl = HAL_GetTick();
@@ -461,6 +464,8 @@ int main(void)
     run_mission(MISSION_PROFILE_AVOID_ONLY);
 #elif (APP_RUN_MODE == RUN_MODE_DBG_PARK_ONLY)
     run_mission(MISSION_PROFILE_PARK_ONLY);
+#elif (APP_RUN_MODE == RUN_MODE_DBG_LOOP)
+    run_mission(MISSION_PROFILE_LOOP);
 #elif (APP_RUN_MODE == RUN_MODE_DBG_MOTOR_ENC)
     run_dbg_motor_enc();
 #elif (APP_RUN_MODE == RUN_MODE_DBG_MOTION_CAL)

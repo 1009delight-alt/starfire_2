@@ -1585,6 +1585,35 @@ static void case_avoid_only_continue(void)
     g_estop = false;
 }
 
+/* 32. 整圈调试：起跑即启用避障；回线后先走 150 mm 再启用；一直循迹不停 */
+static void case_loop_profile(void)
+{
+    printf("\n== 32 整圈调试模式\n");
+    sim_reset_world();
+    Mission_Init(MISSION_PROFILE_LOOP);
+    run_ms(1000);
+    sim_gray("00011000");
+    g_obstacle = true;                                /* 起跑时前面就有障碍 */
+    key(KEY_EVT_SHORT);
+    check(wait_state(ST_AVOID_OBS, 300U), "起跑后立即避障，不等 150 mm（%s，走了 %.0f mm）",
+          Mission_GetStateName(), BspMotor_GetState()->total_dist_mm);
+    g_obstacle = false;
+    for (uint32_t t = 0U; (t < 20000U) && (Mission_GetState() == ST_AVOID_OBS); t += 20U) { run_ms(20); }
+    check(Mission_GetState() == ST_TRACK_TO_OBS, "回线后继续循迹（%s）", Mission_GetStateName());
+    g_obstacle = true;                                /* 回线后马上又看到障碍 */
+    float d0 = BspMotor_GetState()->total_dist_mm;
+    bool early = false;
+    for (uint32_t t = 0U; (t < 3000U) && (Mission_GetState() == ST_TRACK_TO_OBS); t += 20U) {
+        run_ms(20);
+        if ((Mission_GetState() == ST_AVOID_OBS) && (BspMotor_GetState()->total_dist_mm - d0 < 140.0f)) { early = true; }
+    }
+    check(!early && Mission_GetState() == ST_AVOID_OBS, "回线后走够 150 mm 才再次避障（%s）", Mission_GetStateName());
+    g_obstacle = false;
+    g_estop = true;
+    run_ms(40);
+    g_estop = false;
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -1619,6 +1648,7 @@ int main(void)
     case_swap_and_steer();
     case_avoid_two_leg();
     case_avoid_only_continue();
+    case_loop_profile();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }
