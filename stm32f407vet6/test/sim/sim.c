@@ -813,7 +813,7 @@ static void case_corner(void)
     const motor_state_t *m = BspMotor_GetState();
     float avg_a = 0.25f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1] + m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
     Motion_ResetLinePid();
-    (void)line_step_diff("00001110");                     /* 误差 +1.5 */
+    (void)line_step_diff("01110000");                     /* 误差 -1.5（避开坏通道，降速只看 |误差|） */
     float avg_b = 0.25f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1] + m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
     float want_a = 140.0f * (1.0f - CFG_LINE_SLOW_PER_ERR * 0.5f);
     float want_b = 140.0f * (1.0f - CFG_LINE_SLOW_PER_ERR * 1.5f);
@@ -1194,8 +1194,8 @@ static void case_spikes(void)
     Motion_ResetLinePid();
     for (int i = 0; i < 5; ++i) { (void)line_step_diff("00011000"); }
     for (int i = 0; i < 3; ++i) { (void)line_step_diff("11111111"); }
-    float d2 = line_step_diff("00000011");                /* 实测 +3.0 */
-    float p2 = Motion_LinePTerm(3.0f);
+    float d2 = line_step_diff("11000000");                /* 实测 -3.0（避开坏通道） */
+    float p2 = Motion_LinePTerm(-3.0f);
     check(fabsf(d2 - p2) < 10.0f, "路口保持结束那一拍差速 %.0f，约等于 P 项 %.0f", d2, p2);
     BspMotor_Stop();
 }
@@ -1253,9 +1253,9 @@ static void case_review_1125(void)
     sim_reset_world();
     Motion_ResetLinePid();
     for (int i = 0; i < 5; ++i) { (void)line_step_diff("00011000"); }
-    (void)line_step_diff("00011110");                 /* 4 路：横线正在进来 */
+    (void)line_step_diff("01111000");                 /* 4 路：横线正在进来（避开坏通道） */
     float dc = 0.0f;
-    for (int i = 0; i < 3; ++i) { dc = line_step_diff("00011111"); }
+    for (int i = 0; i < 3; ++i) { dc = line_step_diff("11111000"); }
     check(fabsf(dc) < 0.5f * CFG_LINE_PID_KP, "主线居中斜入 T 字，路口保持差速 %.0f（未被支线拉偏）", dc);
 
     /* P2-4 报告原样：只有最右探头压线（+3.5）后整排压黑，保持值限幅，右轮不反转 */
@@ -1526,6 +1526,65 @@ static void case_swap_and_steer(void)
     run_ms(300);
 }
 
+/* 30. 两段斜行避障：PARALLEL 为 0 时不走平行段，斜出后一次转 OUT+IN，斜回航向 = −DIR × IN */
+static void case_avoid_two_leg(void)
+{
+    printf("\n== 30 两段斜行避障\n");
+    sim_reset_world();
+    run_ms(1000);
+    sim_gray("00011000");
+    start_stage(1);
+    run_ms(800);
+    float yaw0 = BspMotor_GetState()->total_yaw_deg;
+    g_obstacle = true;
+    check(wait_state(ST_AVOID_OBS, 1000U), "看到障碍进入避障");
+    g_obstacle = false;
+    sim_gray("00000000");
+    bool seen[6] = { false, false, false, false, false, false };
+    float yaw_rejoin = 0.0f;
+    bool got_rejoin = false;
+    for (uint32_t t = 0U; (t < 20000U) && (Mission_GetState() == ST_AVOID_OBS); t += 20U) {
+        run_ms(20);
+        uint8_t sp = Mission_GetSubStep();
+        if (sp < 6U) { seen[sp] = true; }
+        if ((sp == 5U) && !got_rejoin) { got_rejoin = true; yaw_rejoin = BspMotor_GetState()->total_yaw_deg; }
+    }
+    if (CFG_AVOID_PARALLEL_DIST_MM <= 0.0f) {
+        check(!seen[2] && !seen[3], "两段斜行：没走转平行、平行两步");
+    }
+    /* 模拟车转向没有过冲，所以按指令角度算：转回指令 = OUT + IN + TRIM，最终航向 = −DIR × (IN + TRIM) */
+    float want = -(float)CFG_AVOID_TURN_DIR * (CFG_AVOID_IN_ANGLE_DEG + CFG_AVOID_TURN_BACK_TRIM_DEG);
+    check(got_rejoin && fabsf((yaw_rejoin - yaw0) - want) < 8.0f,
+          "斜回航向 %.1f°（按指令应约 %.1f°）", yaw_rejoin - yaw0, want);
+}
+
+/* 31. 避障单项调试：回线后接着循迹，不进 DONE */
+static void case_avoid_only_continue(void)
+{
+    printf("\n== 31 避障单项回线后继续循迹\n");
+    sim_reset_world();
+    Mission_Init(MISSION_PROFILE_AVOID_ONLY);
+    run_ms(1000);
+    sim_gray("00011000");
+    key(KEY_EVT_SHORT);
+    run_ms(800);
+    check(Mission_GetState() == ST_TRACK_TO_OBS, "起跑循迹（%s）", Mission_GetStateName());
+    g_obstacle = true;
+    check(wait_state(ST_AVOID_OBS, 1000U), "看到障碍进入避障");
+    g_obstacle = false;
+    bool rejoin = false;
+    for (uint32_t t = 0U; (t < 20000U) && (Mission_GetState() == ST_AVOID_OBS); t += 20U) {
+        run_ms(20);
+        if (!rejoin && (Mission_GetSubStep() == 5U)) { rejoin = true; }
+    }
+    check(rejoin && Mission_GetState() == ST_TRACK_TO_OBS, "回线后继续循迹（%s）", Mission_GetStateName());
+    run_ms(1000);
+    check(Mission_GetState() == ST_TRACK_TO_OBS && !all_pwm_zero(), "1 s 后仍在循迹、电机在转");
+    g_estop = true;
+    run_ms(40);
+    g_estop = false;
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -1558,6 +1617,8 @@ int main(void)
     case_review4_1125();
     case_restart_gray();
     case_swap_and_steer();
+    case_avoid_two_leg();
+    case_avoid_only_continue();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

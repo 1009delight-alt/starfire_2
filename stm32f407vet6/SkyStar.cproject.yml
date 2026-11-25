@@ -20,6 +20,7 @@ project:
         - file: ./App/motion_ctrl.c
         - file: ./App/mission_fsm.c
         - file: ./App/ui_pages.c
+        - file: ./App/run_log.c
     - group: Bsp
       files:
         - file: ./Bsp/bsp_uart.c

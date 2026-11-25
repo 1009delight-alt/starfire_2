@@ -60,8 +60,9 @@
 
 /* 电机左右对调：0 = 驱动板 M1 左前、M2 左后、M3 右前、M4 右后；1 = M1/M2 接的是右侧、M3/M4 接的是左侧。
  * 程序内部一律按车上位置，只在收发驱动板帧时换算；下面的编码器符号和前馈补偿仍按通道号 M1~M4 填。
- * 2026-11-25 车上记录确认接反（程序让左转、车实际右转，线越修越远），用户选程序换算，取 1 */
-#define CFG_MOTOR_SWAP_LR               1U
+ * 2026-11-25 车上记录看到“程序让左转、车实际右转”，一度判为电机接反取 1；随后避障实测程序让原地右转、
+ * 车实际左转（原地转向只用电机和编码器，不经过灰度），证明电机本来接对，反的是灰度左右顺序，改回 0 */
+#define CFG_MOTOR_SWAP_LR               0U
 
 /* 物理前进方向对应的编码器原始增量符号（+1 或 -1），顺序：M1左前, M2左后, M3右前, M4右后
  * 请先运行 RUN_MODE_DBG_MOTOR_ENC 逐轮前推/架空核对！ */
@@ -110,8 +111,10 @@
 /* 2026-11-25 PWLink 实测：白底约 160、黑线约 4040（模块现为数字电平输出），改为 0 */
 #define CFG_GRAY_BLACK_IS_LOW           0U
 /* 0 = 通道 0 在最左、通道 7 在最右；1 = 镜像翻转（装反时只需改这里） */
-/* 2026-11-22 实测：线在车左侧时 ERR 为正，模块装反（X1 在车右侧），改为 1 */
-#define CFG_GRAY_REVERSE_ORDER          1U
+/* 2026-11-22 实测“线在车左侧时 ERR 为正”改为 1；2026-11-25 避障实测证明电机接对、灰度顺序反了
+ * （与 CFG_MOTOR_SWAP_LR=1 两处互相抵消，循迹看起来正常，原地转向方向反），改回 0。
+ * 判断左右一律站在车后、与车头同向看 */
+#define CFG_GRAY_REVERSE_ORDER          0U
 /* 选通 AD0~AD2 后等待模拟开关稳定的微秒数 */
 #define CFG_GRAY_SETTLE_US              40U
 /* 默认 8 通道黑白分割阈值（12 位 ADC：0~4095），用 RUN_MODE_DBG_GRAY 标定后回填 */
@@ -129,8 +132,9 @@
 /* 坏通道屏蔽：bit i = 屏上从左数第 i 个方块（从 0 数，已含装反翻转）。被屏蔽的通道不参与判线，
  * 两侧好通道都压线时补为压线（防止一条线被劈成两段误判分岔），否则当白。0x00 = 不屏蔽。
  * 2026-11-22：模块 X7 撞坏，屏蔽；修好后改回 0x00。
- * REVERSE_ORDER=0 时 X7 在屏上左数第 7 块（序号 6）；改成 1 以后翻到左数第 2 块（序号 1） */
-#define CFG_GRAY_DEAD_MASK              (1U << 1)
+ * REVERSE_ORDER=0 时 X7 在屏上左数第 7 块（序号 6）；为 1 时翻到左数第 2 块（序号 1）。
+ * 2026-11-25 REVERSE_ORDER 改回 0，屏蔽跟着改回序号 6 */
+#define CFG_GRAY_DEAD_MASK              (1U << 6)
 /* 8 路探头位置权重（从最左 ch0 到最右 ch7） */
 #define CFG_GRAY_WEIGHTS                { -3.5f, -2.5f, -1.5f, -0.5f, 0.5f, 1.5f, 2.5f, 3.5f }
 /* 路口判定：压黑探头数 >= 该值且连成一段判为路口，误差保持上一拍直行（赛道路口一律直行）。
@@ -210,12 +214,18 @@
 #define CFG_OBS_CONFIRM_FRAMES          2U
 /* 绕障侧向：+1 = 向左绕（下直道为赛道外侧），-1 = 向右绕（下直道为赛道内侧，推荐避免出布边） */
 #define CFG_AVOID_TURN_DIR              (-1)
-/* 4 步绕障几何参数（需确保全程在障碍物前后左右各 500mm 区域内且不碰 100mm 方块） */
-#define CFG_AVOID_OUT_ANGLE_DEG         48.0f   /* 第 1 步：向绕行侧转出角度 (deg) */
-#define CFG_AVOID_OUT_DIST_MM           230.0f  /* 第 2 步：斜出脱离障碍横向宽度 (mm) */
-#define CFG_AVOID_PARALLEL_DIST_MM      260.0f  /* 第 3 步：回正车身平行越过障碍物 (mm) */
-#define CFG_AVOID_IN_ANGLE_DEG          45.0f   /* 第 4 步：向黑线回切角度 (deg) */
-#define CFG_AVOID_REJOIN_MAX_MM         380.0f  /* 斜回寻线最大距离保护 (mm)，超出报 REJOIN_FAIL */
+/* 绕障几何参数（需确保全程在障碍物前后左右各 500mm 区域内且不碰 100mm 方块）。
+ * 2026-11-25 实车：原来斜出 48° 230 mm → 平行 260 mm → 斜回 45°，回线时已开出白布（8 路全黑），
+ * 用户改为两段长斜行、60°：转出 60° → 斜出 → 一次转 120° → 斜回找线。PARALLEL 设 0 即不走平行段。
+ * 以下距离为估值：斜出 450 mm 时横向约 390 mm、纵向约 225 mm，按车身尺寸和障碍位置实测再调 */
+#define CFG_AVOID_OUT_ANGLE_DEG         60.0f   /* 第 1 步：向绕行侧转出角度 (deg) */
+#define CFG_AVOID_OUT_DIST_MM           450.0f  /* 第 2 步：斜出距离 (mm) */
+#define CFG_AVOID_PARALLEL_DIST_MM      0.0f    /* 平行越过障碍物的距离 (mm)；0 = 两段斜行，不走平行段 */
+#define CFG_AVOID_IN_ANGLE_DEG          60.0f   /* 斜回时相对原线的回切角度 (deg) */
+/* 两段斜行时那一次大转向（OUT+IN = 120°）的修正量 (deg)，加在指令角度上。2026-11-25 实车：转出 60° 基本准，
+ * 转回多转约 20°（大角度原地转的惯性和侧滑累积），取 −20，即指令转 100°。只用于 PARALLEL 为 0 的两段斜行 */
+#define CFG_AVOID_TURN_BACK_TRIM_DEG    (-20.0f)
+#define CFG_AVOID_REJOIN_MAX_MM         600.0f  /* 斜回寻线最大距离保护 (mm)，超出报 REJOIN_FAIL */
 #define CFG_REJOIN_CONFIRM              4U      /* 连续几帧看到线且 |err| <= 阈值才算回到原线 */
 #define CFG_REJOIN_MAX_ERR              1.5f
 

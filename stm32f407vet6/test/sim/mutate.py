@@ -70,7 +70,8 @@ MUTS = {
     "23 死区补偿过零硬切换": [("Bsp/bsp_motor.c", r"float dead = (float)CFG_WHEEL_PWM_DEADZONE * clampf(tgt / CFG_WHEEL_DEAD_RAMP_MM_S, -1.0f, 1.0f);", r"float dead = (tgt > 0.0f) ? (float)CFG_WHEEL_PWM_DEADZONE : -(float)CFG_WHEEL_PWM_DEADZONE;")],
     "23 目标速度不限加速度": [("Bsp/bsp_motor.c", r"        s_cmd_spd[i] = nc;", r"        s_cmd_spd[i] = tgt; (void)nc;")],
     "29 换向减速不放宽": [("Bsp/bsp_motor.c", r"nc = c + clampf(d, -dv_dec, dv_dec);", r"nc = c + clampf(d, -dv_acc, dv_acc);")],
-    "29 不做左右换算": [("Bsp/bsp_motor.c", r"#define POS_CH(p)  ((CFG_MOTOR_SWAP_LR != 0U) ? ((p) ^ 2) : (p))", r"#define POS_CH(p)  (p)")],
+    # “29 不做左右换算”在 CFG_MOTOR_SWAP_LR=0 时与原码等价、抓不到；开关重新取 1 时再加回：
+    # ("Bsp/bsp_motor.c", r"#define POS_CH(p)  ((CFG_MOTOR_SWAP_LR != 0U) ? ((p) ^ 2) : (p))", r"#define POS_CH(p)  (p)")
     "23 停车不清限速目标": [("Bsp/bsp_motor.c", r"""        s_cmd_spd[i] = 0.0f;
         s_last_pwm[i] = 0;""", r"""        s_last_pwm[i] = 0;""")],
     "23 换来源时仍算微分": [("App/motion_ctrl.c", r"float d_raw = (s_line_have_prev && !src_switch)", r"float d_raw = (s_line_have_prev)")],
@@ -96,6 +97,12 @@ MUTS = {
     "28 重跑不清灰度": [("App/mission_fsm.c", r"""按旧误差猛转 */
     BspGray_ResetTrack();""", r"""按旧误差猛转 */
     (void)0;""")],
+    "30 两段斜行仍走平行": [("App/mission_fsm.c", r"if (CFG_AVOID_PARALLEL_DIST_MM > 0.0f) {", r"if (1) {")],
+    "30 斜回只转回 IN": [("App/mission_fsm.c", r"Motion_StartTurnDeg(-dir * (CFG_AVOID_OUT_ANGLE_DEG + CFG_AVOID_IN_ANGLE_DEG +", r"Motion_StartTurnDeg(-dir * (CFG_AVOID_IN_ANGLE_DEG +")],
+    "30 转回不加修正": [("App/mission_fsm.c", r"""                                            CFG_AVOID_TURN_BACK_TRIM_DEG),""", r"""                                            0.0f),""")],
+    "31 避障单项回线后停车": [("App/mission_fsm.c", r"""                enter_state(ST_TRACK_TO_OBS, now_ms);
+            } else {""", r"""                enter_state(ST_DONE, now_ms);
+            } else {""")],
     "22 丢线误差一步到边界": [("Bsp/gray_logic.c", r"st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);", r"st->error = target;")],
 }
 

@@ -352,8 +352,16 @@ static void step_avoid_obs(uint32_t now_ms)
 
     case AVOID_STEP_MOVE_OUT:
         if (Motion_UpdateDriveDist()) {
-            s_avoid_step = AVOID_STEP_TURN_PARALLEL;
-            Motion_StartTurnDeg(-dir * CFG_AVOID_OUT_ANGLE_DEG, CFG_SPEED_TURN_INPLACE_MM_S);
+            if (CFG_AVOID_PARALLEL_DIST_MM > 0.0f) {
+                s_avoid_step = AVOID_STEP_TURN_PARALLEL;
+                Motion_StartTurnDeg(-dir * CFG_AVOID_OUT_ANGLE_DEG, CFG_SPEED_TURN_INPLACE_MM_S);
+            } else {
+                /* 不走平行段（两段斜行）：从斜出方向一次转到斜回方向 */
+                s_avoid_step = AVOID_STEP_TURN_IN;
+                Motion_StartTurnDeg(-dir * (CFG_AVOID_OUT_ANGLE_DEG + CFG_AVOID_IN_ANGLE_DEG +
+                                            CFG_AVOID_TURN_BACK_TRIM_DEG),
+                                    CFG_SPEED_TURN_INPLACE_MM_S);
+            }
         }
         break;
 
@@ -396,7 +404,9 @@ static void step_avoid_obs(uint32_t now_ms)
         if (s_rejoin_hits >= CFG_REJOIN_CONFIRM) {
             BspMotor_Stop();
             if (s_profile == MISSION_PROFILE_AVOID_ONLY) {
-                enter_state(ST_DONE, now_ms);
+                /* 避障单项调试：回线后接着循迹，看能否稳稳回到线上（走过 150 mm 后再遇障碍还会再避），
+                 * 按 KEY 停车。2026-11-25 用户要求，原来直接进 DONE 停车 */
+                enter_state(ST_TRACK_TO_OBS, now_ms);
             } else {
                 enter_state(ST_FORK_PASS, now_ms);
             }
@@ -684,6 +694,13 @@ const char *Mission_GetStateName(void)
 const char *Mission_GetFaultReason(void)
 {
     return s_fault_reason;
+}
+
+uint8_t Mission_GetSubStep(void)
+{
+    if (s_state == ST_AVOID_OBS)   { return (uint8_t)s_avoid_step; }
+    if (s_state == ST_PARK_REVERSE) { return (uint8_t)s_park_step; }
+    return 0U;
 }
 
 /* OLED 显示用：已锁存的方向；兜底猜测时返回小写 'l'/'r' */

@@ -39,6 +39,7 @@ void Mission_RequestEmergencyStop(const char *reason);
 mission_state_t Mission_GetState(void);
 const char *Mission_GetStateName(void);
 const char *Mission_GetFaultReason(void);
+uint8_t Mission_GetSubStep(void);        /* 避障子步骤（AVOID_STEP_*）或入库子步骤，其余赛段 0；车上记录用 */
 char Mission_GetForkDisplay(void);          /* 'L'/'R'；兜底猜测为 'l'/'r'；未知为 0 */
 mission_start_t Mission_GetStartStage(void);
 
