@@ -353,17 +353,6 @@ void BspOled_Footer(const char *text)
     BspOled_SetColor(OLED_C_WHITE);
 }
 
-static uint8_t seq_char_color(char ch)
-{
-    switch (ch) {
-    case 'R': return OLED_C_RED;
-    case 'G': return OLED_C_GREEN;
-    case 'B': return OLED_C_BLUE;
-    case 'Y': return OLED_C_YELLOW;
-    default:  return OLED_C_WHITE;
-    }
-}
-
 void BspOled_DrawColorSeq(uint8_t y, const char *seq, uint8_t scale)
 {
     if (scale == 0U) { scale = 1U; }
@@ -373,8 +362,9 @@ void BspOled_DrawColorSeq(uint8_t y, const char *seq, uint8_t scale)
     size_t max_len = OLED_WIDTH / step;
     if (slen > max_len) { slen = max_len; }
     uint8_t x = (uint8_t)((OLED_WIDTH - slen * step) / 2U + scale / 2U);
+    /* 字母一律白色：屏的色序与字母颜色对不上（2026-11-26 用户要求不再按颜色画） */
+    BspOled_SetColor(OLED_C_WHITE);
     for (size_t i = 0U; i < slen; ++i) {
-        BspOled_SetColor(seq_char_color(seq[i]));
         BspOled_DrawChar(x, y, seq[i], scale);
         x = (uint8_t)(x + step);
     }

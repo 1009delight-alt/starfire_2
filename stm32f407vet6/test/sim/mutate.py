@@ -107,6 +107,10 @@ MUTS = {
             } else {""")],
     "32 整圈起跑不立即避障": [("App/mission_fsm.c", r"gate_ok = !s_after_rejoin || (stage_dist >= 150.0f);", r"gate_ok = (stage_dist >= 150.0f);")],
     "32 整圈回线后立即避障": [("App/mission_fsm.c", r"gate_ok = !s_after_rejoin || (stage_dist >= 150.0f);", r"gate_ok = true;")],
+    # 2026-11-26 提速 1.5 倍。预减速在 CFG_SPEED_SCALE=1.0 时巡航与接近速度都是 280、与原码等价，这一项连同把系数改成 1.5 一起变异
+    "33 不预减速": [("Core/Inc/config.h", "#ifndef CFG_SPEED_SCALE ", "#define CFG_SPEED_SCALE 1.5f\n#ifndef CFG_SPEED_SCALE "),
+                  ("App/mission_fsm.c", r"base = fminf(base, CFG_OBS_APPROACH_MM_S);", r"(void)0;")],
+    "33 积分不抗饱和": [("Bsp/bsp_motor.c", r"        if (!sat_push) {", r"        if (1) { (void)sat_push;")],
     "22 丢线误差一步到边界": [("Bsp/gray_logic.c", r"st->error += CFG_GRAY_LOST_ERR_SMOOTH * (target - st->error);", r"st->error = target;")],
 }
 

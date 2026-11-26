@@ -331,6 +331,7 @@ static void sim_reset_world(void)
     g_cam_order[0] = '\0'; g_cam_last_seed[0] = '\0';
     g_gray_scripted = false;
     memset(&g_gray, 0, sizeof g_gray);
+    memset(&g_sim_sonar, 0, sizeof g_sim_sonar);
     {
         static const uint16_t th[8] = CFG_GRAY_TH_DEFAULT;
         memcpy(g_gray.thresh, th, sizeof th);
@@ -1236,7 +1237,12 @@ static void case_review_1125(void)
     sim_gray("00000000");
     run_ms(200);
     float tgt0 = BspMotor_GetState()->target_spd_mm_s[0];
-    check(fabsf(tgt0) < CFG_STALL_MIN_TGT_MM_S, "找线目标 %.0f mm/s，低于堵转门槛 %.0f", tgt0, CFG_STALL_MIN_TGT_MM_S);
+    /* 前提只在找库找线速度低于门槛时成立；CFG_SPEED_SCALE 调高后（1.5 倍时 60）按目标速度判，下面的冻结检查照样要过 */
+    if (CFG_SPEED_PARK_SEARCH_MM_S * CFG_LINE_LOST_SPEED_SCALE < CFG_STALL_MIN_TGT_MM_S) {
+        check(fabsf(tgt0) < CFG_STALL_MIN_TGT_MM_S, "找线目标 %.0f mm/s，低于堵转门槛 %.0f", tgt0, CFG_STALL_MIN_TGT_MM_S);
+    } else {
+        printf("note: 速度系数 %.2f 下找线目标 %.0f mm/s 不低于堵转门槛，本项只查冻结急停\n", CFG_SPEED_SCALE, tgt0);
+    }
     g_enc_frozen = true;
     uint32_t t0 = g_now;
     bool faulted = wait_state(ST_FAULT, 5000U);
@@ -1635,6 +1641,63 @@ static void case_loop_profile(void)
     g_estop = false;
 }
 
+/* 33. 提速 1.5 倍：避障门控内超声看到近物时基速降到 CFG_OBS_APPROACH_MM_S；轮子跟不上、PWM 顶到上限时积分不再累加 */
+static float avg_tgt(void)
+{
+    const motor_state_t *m = BspMotor_GetState();
+    return 0.25f * (m->target_spd_mm_s[0] + m->target_spd_mm_s[1] + m->target_spd_mm_s[2] + m->target_spd_mm_s[3]);
+}
+static void case_speed_up(void)
+{
+    printf("\n== 33 提速：避障预减速、积分抗饱和（巡航 %.0f）\n", CFG_SPEED_CRUISE_MM_S);
+    const float approach = fminf(CFG_SPEED_CRUISE_MM_S, CFG_OBS_APPROACH_MM_S);
+    sim_reset_world();
+    Mission_Init(MISSION_PROFILE_LOOP);                /* 整圈模式起跑即启用避障门控 */
+    run_ms(1000);
+    sim_gray("00011000");
+    g_sim_sonar.valid = true;
+    g_sim_sonar.dist_mm = 1000U;
+    key(KEY_EVT_SHORT);
+    run_ms(1500);
+    check(Mission_GetState() == ST_TRACK_TO_OBS && fabsf(avg_tgt() - CFG_SPEED_CRUISE_MM_S) < 1.0f,
+          "远处障碍不减速（目标 %.0f）", avg_tgt());
+    g_sim_sonar.valid = false;                         /* 超量程/无效读数不当近物 */
+    g_sim_sonar.dist_mm = 100U;
+    run_ms(200);
+    check(fabsf(avg_tgt() - CFG_SPEED_CRUISE_MM_S) < 1.0f, "无效读数不减速（目标 %.0f）", avg_tgt());
+    g_sim_sonar.valid = true;
+    g_sim_sonar.dist_mm = (uint16_t)(CFG_OBS_SLOW_DIST_MM - 20U);
+    run_ms(400);
+    float v = 0.0f;
+    for (int i = 0; i < 4; ++i) { v += 0.25f * g_v[i]; }
+    check(fabsf(avg_tgt() - approach) < 1.0f && v < approach + 10.0f,
+          "读数 %u mm 时基速降到 %.0f（目标 %.0f，实测 %.0f）", (unsigned)g_sim_sonar.dist_mm, approach, avg_tgt(), v);
+    g_obstacle = true;
+    check(wait_state(ST_AVOID_OBS, 300U), "照常触发避障（%s）", Mission_GetStateName());
+    g_obstacle = false;
+    g_estop = true;
+    run_ms(40);
+    g_estop = false;
+
+    /* 抗饱和：负载很大时轮子到不了目标、PWM 顶到上限 2 s；负载去掉后目标降到 200，积分没攒满，
+     * PWM 很快回到 200 对应的水平 */
+    sim_reset_world();
+    run_ms(200);
+    g_load = 0.3f;
+    BspMotor_SetDiffSpeed(600.0f, 600.0f);
+    int max_pwm = 0;
+    for (int t = 0; t < 2000; t += 20) { run_ms(20); if (g_pwm[0] > max_pwm) { max_pwm = g_pwm[0]; } }
+    check(max_pwm >= CFG_WHEEL_PWM_MAX, "重负载时 PWM 顶到上限（%d）", max_pwm);
+    g_load = 1.0f;
+    BspMotor_SetDiffSpeed(200.0f, 200.0f);
+    run_ms(200);
+    /* 模拟：有抗饱和 200 ms 后约 238 mm/s，去掉抗饱和约 301（积分攒满退不出来） */
+    check(g_v[0] < 270.0f && g_pwm[0] < 1500, "负载去掉、目标降到 200 后 200 ms 轮速 %.0f、PWM %d 已回落",
+          g_v[0], g_pwm[0]);
+    BspMotor_Stop();
+    run_ms(300);
+}
+
 int main(void)
 {
     case_cam_restart();
@@ -1670,6 +1733,7 @@ int main(void)
     case_avoid_two_leg();
     case_avoid_only_continue();
     case_loop_profile();
+    case_speed_up();
     printf("\n%d/%d passed\n", g_checks - g_fails, g_checks);
     return g_fails ? 1 : 0;
 }

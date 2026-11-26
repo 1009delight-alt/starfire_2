@@ -39,7 +39,7 @@ void BspOled_Printf(uint8_t x, uint8_t y, uint8_t scale, const char *fmt, ...);
  * 居中的四色序列（R/G/B/Y 用对应颜色）。调用后前景色恢复白色。 */
 void BspOled_Title(const char *text, uint8_t bg_color);
 void BspOled_Footer(const char *text);
-void BspOled_DrawColorSeq(uint8_t y, const char *seq, uint8_t scale);
+void BspOled_DrawColorSeq(uint8_t y, const char *seq, uint8_t scale);  /* 四色序列居中画，字母一律白色 */
 void BspOled_Flush(void);          /* 阻塞发送全部有变化的条带（整屏约 35 ms），只在初始化时用 */
 bool BspOled_FlushStep(void);      /* 每次最多发一条带，返回 true 表示已同步 */
 

@@ -568,10 +568,6 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
         break;
 
     case ST_TRACK_TO_OBS: {
-        Motion_LineFollowStep(CFG_SPEED_CRUISE_MM_S, GRAY_BIAS_CENTER, dt_s);
-        if (check_line_lost()) {
-            break;
-        }
         /* 避障门控：比赛按总里程；避障单项起跑后走 150 mm；整圈模式起跑即启用，回线后同样先走 150 mm */
         bool gate_ok;
         if (s_profile == MISSION_PROFILE_LOOP) {
@@ -580,6 +576,19 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
             gate_ok = (stage_dist >= 150.0f);
         } else {
             gate_ok = (mot->total_dist_mm >= CFG_GATE_OBS_ENABLE_MM);
+        }
+        /* 避障前预减速：前方已看到近物时基速降到原巡航速度，触发距离与绕行几何沿用 280 接近时的实测 */
+        float base = CFG_SPEED_CRUISE_MM_S;
+#if (CFG_ENABLE_SONAR != 0U)
+        const sonar_state_t *son = BspSonar_GetState();
+        if (gate_ok && BspSonar_IsHealthy(now_ms) && son->valid &&
+            (son->dist_mm <= CFG_OBS_SLOW_DIST_MM)) {
+            base = fminf(base, CFG_OBS_APPROACH_MM_S);
+        }
+#endif
+        Motion_LineFollowStep(base, GRAY_BIAS_CENTER, dt_s);
+        if (check_line_lost()) {
+            break;
         }
 #if (CFG_ENABLE_SONAR != 0U)
         /* 避障窗口内超声失效不能当作前方畅通（文档 2 章） */

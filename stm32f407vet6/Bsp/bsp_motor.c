@@ -342,8 +342,14 @@ void BspMotor_ControlStep(uint32_t now_ms, float dt_s)
         s_pid_prev_tgt[i] = tgt;
 
         float err = tgt - s_mot.wheel_spd_mm_s[i];
-        s_pid_integ[i] = clampf(s_pid_integ[i] + err * dt_s * CFG_WHEEL_PID_KI * 50.0f,
-                                -1200.0f, 1200.0f);
+        /* 抗饱和：上一拍输出已顶到 PWM 上限、误差还往同一方向推时不再累加积分。否则轮子跟不上目标
+         * （提速后 M3 常见）时积分一路攒满，目标降下来后要好几拍才退得出来，这一侧轮迟迟减不了速 */
+        float integ_inc = err * dt_s * CFG_WHEEL_PID_KI * 50.0f;
+        bool sat_push = ((s_last_pwm[i] >= CFG_WHEEL_PWM_MAX) && (integ_inc > 0.0f)) ||
+                        ((s_last_pwm[i] <= -CFG_WHEEL_PWM_MAX) && (integ_inc < 0.0f));
+        if (!sat_push) {
+            s_pid_integ[i] = clampf(s_pid_integ[i] + integ_inc, -1200.0f, 1200.0f);
+        }
         float deriv = (err - s_pid_prev_err[i]) / dt_s;
         s_pid_prev_err[i] = err;
 

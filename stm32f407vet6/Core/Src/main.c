@@ -39,7 +39,7 @@
 #define RUN_MODE_DBG_PARK_ONLY      8U
 #define RUN_MODE_DBG_LOOP           9U
 
-#define APP_RUN_MODE               RUN_MODE_RACE 
+#define APP_RUN_MODE               RUN_MODE_DBG_OPENMV 
 /* 调试辅助变量（Keil / VS Code Watch 窗口可直接观测） */
 volatile uint32_t g_main_loop_ticks = 0U;
 

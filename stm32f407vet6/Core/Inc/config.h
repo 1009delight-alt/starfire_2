@@ -94,8 +94,8 @@
  * 原来加减速一律按 2000，找线时一侧轮换向要约 300 ms，车多转一截才回头。2026-11-25 新增，估值；
  * 转向回头还慢就加大，减速时车身点头、打滑就减小 */
 #define CFG_WHEEL_DEC_MAX_MM_S2         8000.0f
-#define CFG_WHEEL_PWM_MAX               2400    /* 四轮统一安全 PWM 上限（协议满量程 3600） */
-#define CFG_WHEEL_SPD_MAX_MM_S          650.0f  /* 最大允许目标轮速 (mm/s) */
+#define CFG_WHEEL_PWM_MAX               3000    /* 四轮统一安全 PWM 上限（协议满量程 3600）。2026-11-26 为提速 1.5 倍由 2400 放宽：M3 前馈 ×1.30，2400 时约 490 mm/s 就饱和 */
+#define CFG_WHEEL_SPD_MAX_MM_S          800.0f  /* 最大允许目标轮速 (mm/s)。2026-11-26 由 650 放宽：巡航 420 时弯里外侧轮要 600 以上 */
 /* 目标为正、轮子却被车身拖得比目标快时，允许输出的最大反向（制动）PWM。0 = 旧行为（最低只到 0，只能滑行）。
  * 2026-11-23 新增：差速转弯时内侧轮被外侧轮拖着走，减不下来，速度差被抹平 */
 #define CFG_WHEEL_BRAKE_PWM             200
@@ -150,7 +150,7 @@
 #define CFG_LINE_CROSS_MAX_MM           80.0f
 
 /* ==================== 4. 循迹 PID 与各赛段目标速度 (mm/s) ==================== */
-#define CFG_LINE_PID_KP                 80.0f   /* 线偏误差 -> 左右差速 (mm/s) */
+#define CFG_LINE_PID_KP                 100.0f   /* 线偏误差 -> 左右差速 (mm/s) */
 #define CFG_LINE_PID_KI                 0.0f
 #define CFG_LINE_PID_KD                 100.0f
 /* P 项按误差大小变增益（2026-11-24 新增）：P = KP × err × (CENTER + EDGE × |err|)。
@@ -167,13 +167,24 @@
  * -260，巡航 280 时到 -120。应不小于丢线限幅 CFG_LINE_LOST_DIFF_MM_S，否则后者不起作用 */
 #define CFG_LINE_DIFF_MAX_MM_S          400.0f  /* 差速限幅 (mm/s) */
 
-#define CFG_SPEED_CRUISE_MM_S           280.0f  /* 常规直道/前两弯巡航速度 */
-#define CFG_SPEED_FORK_MM_S             190.0f  /* 路牌识别与分岔口速度 */
-#define CFG_SPEED_COLOR_MM_S            170.0f  /* 左侧直道识别 4 色块速度（慢而稳） */
-#define CFG_SPEED_PARK_SEARCH_MM_S      160.0f  /* 顶直道找 P 牌速度 */
-#define CFG_SPEED_AVOID_MM_S            200.0f  /* 避障绕行速度 */
-#define CFG_SPEED_TURN_INPLACE_MM_S     150.0f  /* 原地转向轮速 */
-#define CFG_SPEED_REVERSE_PARK_MM_S     130.0f  /* 倒车入库速度 */
+/* 赛段速度统一系数（2026-11-26 新增，提速目标 1.5）：乘在下面五个赛段基速上，现场按 1.0 → 1.2 → 1.35 → 1.5
+ * 逐级加，每级用车上记录核对误差分布、丢线和轮速是否跟得上。原地转向、倒车、找线最低速不乘
+ * （避障转回修正、入库距离按现在的转速实测）。改速度后等效轮径要按新速度重新标定 */
+#ifndef CFG_SPEED_SCALE                 /* 回放可用 -DCFG_SPEED_SCALE=1.5f 覆盖 */
+#define CFG_SPEED_SCALE                 1.3f
+#endif
+#define CFG_SPEED_CRUISE_BASE_MM_S      280.0f  /* 常规直道/前两弯巡航速度 */
+#define CFG_SPEED_FORK_BASE_MM_S        190.0f  /* 路牌识别与分岔口速度 */
+#define CFG_SPEED_COLOR_BASE_MM_S       200.0f  /* 左侧直道识别 4 色块速度（11-26 色块稳定，用户由 170 提到 200） */
+#define CFG_SPEED_PARK_SEARCH_BASE_MM_S 160.0f  /* 顶直道找 P 牌速度 */
+#define CFG_SPEED_AVOID_BASE_MM_S       200.0f  /* 避障绕行速度 */
+#define CFG_SPEED_CRUISE_MM_S           (CFG_SPEED_CRUISE_BASE_MM_S * CFG_SPEED_SCALE)
+#define CFG_SPEED_FORK_MM_S             (CFG_SPEED_FORK_BASE_MM_S * CFG_SPEED_SCALE)
+#define CFG_SPEED_COLOR_MM_S            (CFG_SPEED_COLOR_BASE_MM_S * CFG_SPEED_SCALE)
+#define CFG_SPEED_PARK_SEARCH_MM_S      (CFG_SPEED_PARK_SEARCH_BASE_MM_S * CFG_SPEED_SCALE)
+#define CFG_SPEED_AVOID_MM_S            (CFG_SPEED_AVOID_BASE_MM_S * CFG_SPEED_SCALE)
+#define CFG_SPEED_TURN_INPLACE_MM_S     150.0f  /* 原地转向轮速（不乘系数） */
+#define CFG_SPEED_REVERSE_PARK_MM_S     130.0f  /* 倒车入库速度（不乘系数） */
 
 /* 直线里程保持与原地转向精度参数 */
 #define CFG_DRIVE_HEADING_KP            4.5f    /* 定距直行航向纠偏 (mm/s per deg) */
@@ -212,6 +223,11 @@
 /* 3 点中值后连续几次 <= 触发距离才启动避障。超声 60 ms 一次，比原激光 33 ms 慢：
  * 中值要 2 次近读数 + 确认 2 次 ≈ 3 次测量 ≈ 180 ms，巡航 280 mm/s 时多走约 50 mm，与原激光 3 帧相当 */
 #define CFG_OBS_CONFIRM_FRAMES          2U
+/* 避障前预减速（2026-11-26 新增，为提速 1.5 倍）：避障门控已开、超声中值 <= SLOW_DIST 时，循迹基速不超过
+ * APPROACH（原巡航 280，不乘速度系数），触发距离和绕行几何仍按 280 接近时的实测。估值：
+ * 读数从 500 到 240 约 260 mm，420→280 由减速限幅约 70 ms 完成 */
+#define CFG_OBS_SLOW_DIST_MM            500U
+#define CFG_OBS_APPROACH_MM_S           280.0f
 /* 绕障侧向：+1 = 向左绕（下直道为赛道外侧），-1 = 向右绕（下直道为赛道内侧，推荐避免出布边） */
 #define CFG_AVOID_TURN_DIR              (-1)
 /* 绕障几何参数（需确保全程在障碍物前后左右各 500mm 区域内且不碰 100mm 方块）。
