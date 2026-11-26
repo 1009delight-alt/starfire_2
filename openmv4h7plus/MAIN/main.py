@@ -25,14 +25,14 @@ FRAME_SIZE = "QVGA"     # QQVGA / QVGA / VGA
 EXPOSURE_US = None      # 画面过亮发白时填一个比 EXP= 读数小的值，如 8000；None = 自动后锁定
 GAIN_DB = None          # 过亮时可填 0；None = 自动后锁定
 
-# ======================= 颜色顺序参数（与调试版一致） =======================
+# ======================= 颜色顺序参数（TH_Y、MIN_SAT 11-26 按暖光改过，调试版未同步） =======================
 TH_R = (12, 95, 25, 127, 8, 127)
-TH_G = (12, 95, -128, -33, -5, 127)
+TH_G = (12, 95, -128, -15, -5, 127)   # A 上限 -15：强反光下绿块被洗成浅绿，A 只有 -14~-25（原 -33）
 TH_B = (8, 85, -35, 127, -128, -18)
-TH_Y = (35, 100, -32, 24, 28, 127)
+TH_Y = (35, 100, -32, 24, 45, 127)   # B 下限 45：暖光下墙面 B 约 28~31，原来的 28 会把整面墙当黄色
 HUE = ((335, 22), (78, 170), (190, 265), (36, 72))      # 红、绿、蓝、黄
 VOTES = 8
-MIN_SAT = 28
+MIN_SAT = 40            # 饱和度下限（%）；暖光墙面约 32%，低于 40 当作灰色
 ROI = (72, 35, 16, 64)  # 白框 (x, y, 宽, 高)，按 160×120 填写
 MIN_PIXELS = 80
 MIN_W, MIN_H = 6, 10
@@ -41,12 +41,15 @@ CONFIRM = 3
 CLEAR = 3
 REQUIRE_GAP = True
 
-# ======================= 转向标志参数（与调试版一致） =======================
-TH_SIGN = (0, 50, -10, 60, -128, -10)
-TH_ARROW = (55, 100, -25, 25, -25, 25)
+# ======================= 转向标志参数（11-26 按右前 45° 改过，调试版未同步） =======================
+TH_SIGN = (0, 80, -10, 60, -128, -12)   # 深蓝底；L 上限 80：强反光处蓝牌 L 到 75、B 约 -16
+TH_ARROW = (55, 100, -25, 25, -12, 40)  # 白箭头/白字；B 下限 -12 与反光蓝区分开，上限 40 容下暖光米黄字
+TURN_ASPECT = (0.45, 1.4)  # 宽高比；右前 45° 斜看圆牌约 0.6~0.75
 TURN_ROI = (0, 0, 160, 120)
 TURN_MIN_PIXELS = 60
 TURN_MIN_DX = 0.08
+ARROW_INSET = 0.15      # 算箭头时牌框四边各内缩的比例
+ARROW_RADIUS = 0.35     # 白块中心按牌宽、高归一后离圆心的上限（牌外白边约 0.5）
 TURN_CONFIRM = 5
 
 # ======================= P 牌参数（待实测） =======================
@@ -55,9 +58,11 @@ TH_PARK = TH_SIGN       # 蓝底阈值，先沿用转向牌，按实物 LAB 读�
 PARK_ROI = (0, 0, 160, 120)
 PARK_MIN_PIXELS = 70    # 蓝牌最少像素（按 160×120）
 PARK_MIN_SIDE = 10      # 外接矩形最短边（按 160×120），太小的远处色块不要
-PARK_ASPECT = (0.60, 1.50)  # 宽高比；侧视有透视压缩，比转向牌放宽
-PARK_MIN_CORNERS = 3    # 4 个内缩 1/8 的角点中至少几个是蓝色
+PARK_ASPECT = (0.40, 1.50)  # 宽高比；右前 45° 斜看约 0.55~0.65
+PARK_MIN_CORNERS = 2    # 4 个内缩 1/8 的角点中至少几个是蓝色；斜看成平行四边形会丢一角，遮挡再丢一角
 PARK_WHITE_RATIO = (0.08, 0.65)  # 牌中部白色像素占中部面积的比例范围；过白的是白板之类
+PARK_WHITE_MIN_H = 0.5  # P 字白色外接框高度至少占牌中部高度的比例（横白条约 0.25）
+PARK_WHITE_TALL = 1.2   # P 字白色外接框高宽比下限（P 约 2.2，横白条约 0.4）
 PARK_CONFIRM = 4        # 连续几帧看到才上报 flag=1，防单帧误检触发入库
 
 # ======================= 内部常量 =======================
@@ -179,7 +184,7 @@ def find_sign(img, to_lab):
     for b in img.find_blobs([TH_SIGN], roi=TROI, pixels_threshold=TURN_MIN_PIXELS * K * K,
                             area_threshold=TURN_MIN_PIXELS * K * K, merge=False):
         x, y, w, h = b.x(), b.y(), b.w(), b.h()
-        if not 0.7 <= w / h <= 1.4:
+        if not TURN_ASPECT[0] <= w / h <= TURN_ASPECT[1]:
             continue
         dx, dy = max(1, w // 10), max(1, h // 10)
         corners = ((x + dx, y + dy), (x + w - 1 - dx, y + dy),
@@ -192,13 +197,20 @@ def find_sign(img, to_lab):
 
 
 def arrow_x(img, sign, top):
-    """牌内上半或下半部分白色像素的平均 x；只算靠近圆心的部分，避开牌外白边。"""
+    """牌内上半或下半部分白色像素的平均 x；只算靠近圆心的部分，避开牌外白边。
+
+    先把牌框四边各内缩 ARROW_INSET 再分上下两半，白块中心按牌的宽、高归一后离圆心
+    小于 ARROW_RADIUS 才算。斜看时圆牌是竖椭圆，按宽、高分别归一才不会把白边圈进来；
+    原来按整框切半、按宽度算半径，牌框差 1 像素，白边弧段就会时进时出，dx 跳到门槛附近。
+    """
     x, y, w, h = sign.x(), sign.y(), sign.w(), sign.h()
     cx, cy = x + w / 2, y + h / 2
-    half = (x, y, w, max(1, h // 2)) if top else (x, y + h // 2, w, max(1, h - h // 2))
+    mx, my = int(w * ARROW_INSET), int(h * ARROW_INSET)
+    ix, iy, iw, ih = x + mx, y + my, max(1, w - 2 * mx), max(2, h - 2 * my)
+    half = (ix, iy, iw, ih // 2) if top else (ix, iy + ih // 2, iw, ih - ih // 2)
     total = moment = 0
     for b in img.find_blobs([TH_ARROW], roi=half, pixels_threshold=2, area_threshold=2, merge=False):
-        if (b.cx() - cx) ** 2 + (b.cy() - cy) ** 2 < (0.4 * w) ** 2:
+        if ((b.cx() - cx) / w) ** 2 + ((b.cy() - cy) / h) ** 2 < ARROW_RADIUS ** 2:
             total += b.pixels()
             moment += b.cx() * b.pixels()
     return moment / total if total else None
@@ -255,10 +267,17 @@ def find_park(img, to_lab):
         ix, iy = x + w // 6, y + h // 6
         iw, ih = max(2, w - 2 * (w // 6)), max(2, h - 2 * (h // 6))
         white = 0
+        wx0 = wy0 = 1 << 30
+        wx1 = wy1 = -1
         for wb in img.find_blobs([TH_ARROW], roi=(ix, iy, iw, ih), pixels_threshold=3,
                                  area_threshold=3, merge=False):
             white += wb.pixels()
+            wx0, wy0 = min(wx0, wb.x()), min(wy0, wb.y())
+            wx1, wy1 = max(wx1, wb.x() + wb.w()), max(wy1, wb.y() + wb.h())
         if not PARK_WHITE_RATIO[0] <= white / (iw * ih) <= PARK_WHITE_RATIO[1]:
+            continue
+        # P 字是竖长的笔画；横白条、方块字之类不算
+        if wy1 - wy0 < PARK_WHITE_MIN_H * ih or (wy1 - wy0) < PARK_WHITE_TALL * (wx1 - wx0):
             continue
         if best is None or w * h > best.w() * best.h():
             best = b

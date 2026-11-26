@@ -11,6 +11,9 @@
 /openmv4h7plus/openmvide/
 /openmv4h7plus/*.zip
 
+# 右前 45° 合成测试素材（约 121 MB）不入库，留在本机给 test_scene45.py 用
+/openmv4h7plus/test/右前45度场景/
+
 # tmp 只留主文档生成脚本
 /tmp/*
 !/tmp/build_handover_doc_v2.js
