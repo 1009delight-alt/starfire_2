@@ -22,7 +22,7 @@
  *    RUN_MODE_DBG_MOTION_CAL  : 地面 1000mm 直线 & 原地 90° 转向标定
  *    RUN_MODE_DBG_GRAY        : 8 路灰度原始 ADC / 二值化 / 一键阈值校准
  *    RUN_MODE_DBG_SONAR       : 前向超声 HC-SR04 测距与避障触发测试
- *    RUN_MODE_DBG_OPENMV      : OpenMV 协议联调（按 KEY 轮切 IDLE/TURN/COLOR/PARK）
+ *    RUN_MODE_DBG_OPENMV      : OpenMV 联调（长按切 TURN/COLOR/PARK，短按按该赛段速度循迹/停车）
  *    RUN_MODE_DBG_LINE_ONLY   : 纯循迹 PID 调试（按 KEY 启停，长按切中/左/右偏置）
  *    RUN_MODE_DBG_AVOID_ONLY  : 单项避障绕行与回线测试
  *    RUN_MODE_DBG_PARK_ONLY   : 单项寻 P 牌与倒车入库停 5 秒测试
@@ -39,7 +39,7 @@
 #define RUN_MODE_DBG_PARK_ONLY      8U
 #define RUN_MODE_DBG_LOOP           9U
 
-#define APP_RUN_MODE               RUN_MODE_DBG_OPENMV
+#define APP_RUN_MODE               RUN_MODE_RACE 
 /* 调试辅助变量（Keil / VS Code Watch 窗口可直接观测） */
 volatile uint32_t g_main_loop_ticks = 0U;
 
@@ -258,10 +258,21 @@ static void run_dbg_sonar(void)
 #endif
 
 #if (APP_RUN_MODE == RUN_MODE_DBG_OPENMV)
-/* OpenMV 联调：短按 KEY 轮切 IDLE -> TURN -> COLOR -> PARK，长按复位 */
+/* OpenMV 联调（2026-11-26 改）：停车时长按 KEY 轮切视觉任务 TURN -> COLOR -> PARK；
+ * 短按起跑：清掉相机旧结果，按所选任务对应赛段的速度循迹（TURN=分岔 190、COLOR=色块 170、
+ * PARK=找库 160），相机一直做该任务，只看识别、不按结果转向/入库；再短按停车。
+ * 起跑要求编码器在线；丢线超距离/超转角或电机故障停车（LED 故障闪）。 */
+static float dbg_openmv_speed(openmv_task_t task)
+{
+    if (task == OPENMV_TASK_TURN)  { return CFG_SPEED_FORK_MM_S; }
+    if (task == OPENMV_TASK_COLOR) { return CFG_SPEED_COLOR_MM_S; }
+    return CFG_SPEED_PARK_SEARCH_MM_S;
+}
+
 static void run_dbg_openmv(void)
 {
     openmv_task_t task = OPENMV_TASK_TURN;
+    uint8_t running = 0U;
     uint32_t last_ctrl = 0U, last_oled = 0U;
     BspOpenmv_SetTask(task);
     Board_LedSetPattern(LED_PAT_SLOW_BLINK);
@@ -272,23 +283,49 @@ static void run_dbg_openmv(void)
         (void)BspOled_FlushStep();   /* 每圈最多发一条 8 行条带（约 2 ms），不挤占控制周期 */
 
         board_key_event_t ev = Board_KeyTakeEvent();
-        if (ev == KEY_EVT_LONG) {
-            BspOpenmv_ResetAll();
-            task = OPENMV_TASK_IDLE;
-        } else if (ev == KEY_EVT_SHORT) {
-            task = (openmv_task_t)(((uint8_t)task + 1U) % 4U);
+        if ((ev == KEY_EVT_LONG) && (running == 0U)) {
+            task = (task == OPENMV_TASK_TURN)  ? OPENMV_TASK_COLOR :
+                   ((task == OPENMV_TASK_COLOR) ? OPENMV_TASK_PARK : OPENMV_TASK_TURN);
             BspOpenmv_SetTask(task);
+        } else if (ev == KEY_EVT_SHORT) {
+            if (running != 0U) {
+                running = 0U;
+                BspMotor_Stop();
+                Board_LedSetPattern(LED_PAT_SLOW_BLINK);
+            } else if (!BspMotor_GetState()->enc_online) {
+                Board_LedSetPattern(LED_PAT_FAULT_BLINK);
+            } else {
+                BspOpenmv_ResetAll();          /* 清旧方向/四色/P 牌，本轮重新识别 */
+                BspOpenmv_SetTask(task);
+                BspMotor_ClearFault();
+                Motion_ResetLinePid();
+                BspGray_ResetTrack();
+                running = 1U;
+                Board_LedSetPattern(LED_PAT_FAST_BLINK);
+            }
         }
 
         if ((uint32_t)(now - last_ctrl) >= CFG_MAIN_CTRL_PERIOD_MS) {
+            float dt = (float)(now - last_ctrl) * 0.001f;
             last_ctrl = now;
-            BspMotor_ControlStep(now, 0.02f);
+            if (running != 0U) {
+                Motion_LineFollowStep(dbg_openmv_speed(task), GRAY_BIAS_CENTER, dt);
+                if (BspMotor_HasFault() ||
+                    (Motion_GetLineLostMm() > CFG_LINE_LOST_MAX_MM) ||
+                    (Motion_GetLineLostDeg() > CFG_LINE_LOST_MAX_DEG)) {
+                    running = 0U;
+                    BspMotor_Stop();
+                    Board_LedSetPattern(LED_PAT_FAULT_BLINK);
+                }
+            }
+            BspMotor_ControlStep(now, dt);
         }
 
         if ((uint32_t)(now - last_oled) >= CFG_OLED_REFRESH_PERIOD_MS) {
             last_oled = now;
             const openmv_state_t *mv = BspOpenmv_GetState();
-            UiPage_Openmv(mv, BspOpenmv_TaskName(mv->target_task), BspOpenmv_TaskName(mv->ack_task));
+            UiPage_Openmv(mv, BspOpenmv_TaskName(mv->target_task), BspOpenmv_TaskName(mv->ack_task),
+                          running != 0U);
         }
     }
 }
@@ -456,6 +493,8 @@ static void run_mission(mission_profile_t profile)
 
 int main(void)
 {
+
+
     system_bsp_init();
 
 #if   (APP_RUN_MODE == RUN_MODE_RACE)

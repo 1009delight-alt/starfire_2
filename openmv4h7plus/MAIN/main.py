@@ -22,14 +22,15 @@ MAX_BODY = 63           # 帧体最大字节数，超长整帧丢弃
 
 # ======================= 摄像头 =======================
 FRAME_SIZE = "QVGA"     # QQVGA / QVGA / VGA
+CAMERA_ROTATE_180 = True  # 摄像头倒装时旋转 180 度；正装时改为 False
 EXPOSURE_US = None      # 画面过亮发白时填一个比 EXP= 读数小的值，如 8000；None = 自动后锁定
 GAIN_DB = None          # 过亮时可填 0；None = 自动后锁定
 
 # ======================= 颜色顺序参数（TH_Y、MIN_SAT 11-26 按暖光改过，调试版未同步） =======================
 TH_R = (12, 95, 25, 127, 8, 127)
-TH_G = (12, 95, -128, -15, -5, 127)   # A 上限 -15：强反光下绿块被洗成浅绿，A 只有 -14~-25（原 -33）
+TH_G = (12, 100, -128, -30, -5, 127)  # 11-26 现场绿色 A 中位数约 -53；收紧上限，避免黄色阴影混入（合成素材 76 号强反光要 -15）
 TH_B = (8, 85, -35, 127, -128, -18)
-TH_Y = (35, 100, -32, 24, 45, 127)   # B 下限 45：暖光下墙面 B 约 28~31，原来的 28 会把整面墙当黄色
+TH_Y = (35, 100, -25, 24, 28, 127)   # 11-26 现场黄色 B 约 29~61，背景约 3；A 与绿色范围分开（合成素材暖光墙面 B 约 28~31）
 HUE = ((335, 22), (78, 170), (190, 265), (36, 72))      # 红、绿、蓝、黄
 VOTES = 8
 MIN_SAT = 40            # 饱和度下限（%）；暖光墙面约 32%，低于 40 当作灰色
@@ -523,6 +524,8 @@ def setup_camera(sensor):
     sensor.reset()
     sensor.set_pixformat(sensor.RGB565)
     sensor.set_framesize(getattr(sensor, FRAME_SIZE))
+    sensor.set_hmirror(CAMERA_ROTATE_180)
+    sensor.set_vflip(CAMERA_ROTATE_180)
     sensor.skip_frames(time=2000)               # 等自动曝光/白平衡稳定后锁定
     sensor.set_auto_whitebal(False)
     if GAIN_DB is None:

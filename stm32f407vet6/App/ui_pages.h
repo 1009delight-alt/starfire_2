@@ -17,7 +17,7 @@ void UiPage_MotorEnc(const motor_state_t *m, uint8_t next_step);
 void UiPage_MotionCal(const motor_state_t *m, bool active, uint8_t task);
 void UiPage_Gray(const gray_state_t *g, bool calib);
 void UiPage_Sonar(const sonar_state_t *s, bool healthy, bool obstacle);
-void UiPage_Openmv(const openmv_state_t *mv, const char *cmd_name, const char *ack_name);
+void UiPage_Openmv(const openmv_state_t *mv, const char *cmd_name, const char *ack_name, bool running);
 void UiPage_Line(const gray_state_t *g, const motor_state_t *m, bool running, const char *bias_name);
 
 #endif /* UI_PAGES_H */

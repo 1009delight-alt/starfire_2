@@ -268,9 +268,9 @@
 #define CFG_PARK_FRESH_MS               150U    /* 触发入库时最新 PARK 帧（flag=1）必须在多久之内 */
 #define CFG_PARK_ALIGN_CX_MIN           (-25)   /* P 牌进入画面中心偏右/偏左触发窗口 (-100~100) */
 #define CFG_PARK_ALIGN_CX_MAX           35
-#define CFG_PARK_EXTRA_FWD_MM           240.0f  /* 看到对齐点后继续前移，使车中心对齐车库中线 */
+#define CFG_PARK_EXTRA_FWD_MM           580.0f  /* 看到对齐点后继续前移，使车中心对齐车库中线（11-26 实车在正对 P 牌处就倒车，原 240，用户实车调到 580） */
 #define CFG_PARK_TURN_ANGLE_DEG         90.0f   /* 原地左转 90°（正值为左转，使车尾正对右侧车库） */
-#define CFG_PARK_BACK_DIST_MM           360.0f  /* 车尾先入直线倒车距离 (mm)，保证车身完全进 40x40cm 框 */
-#define CFG_PARK_HOLD_MS                5500U   /* 赛题要求停稳至少 5s，留 0.5s 余量 */
+#define CFG_PARK_BACK_DIST_MM           390.0f  /* 车尾先入直线倒车距离 (mm)，保证车身完全进 40x40cm 框（原 360，11-26 用户实车调到 390；试过定时 1250 ms，改回定距） */
+#define CFG_PARK_HOLD_MS                6000U   /* 赛题要求停稳至少 5s，留 1s 余量（11-26 用户由 5500 改） */
 
 #endif /* CAR_CONFIG_H */

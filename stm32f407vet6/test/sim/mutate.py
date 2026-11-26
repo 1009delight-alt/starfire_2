@@ -17,6 +17,8 @@ SRCS = ('App/mission_fsm.c', 'App/motion_ctrl.c', 'Bsp/bsp_motor.c', 'Bsp/bsp_op
         'Bsp/sonar_logic.c')
 
 MUTS = {
+    "33 倒车方向写反": [("App/mission_fsm.c", r"Motion_StartDriveDist(-CFG_PARK_BACK_DIST_MM,", r"Motion_StartDriveDist(CFG_PARK_BACK_DIST_MM,")],
+    "33 P牌后不前移": [("App/mission_fsm.c", r"Motion_StartDriveDist(CFG_PARK_EXTRA_FWD_MM,", r"Motion_StartDriveDist(0.0f,")],
     # 上一轮的 6 处
     "1 相机重启不纠正任务": [("Bsp/bsp_openmv.c", r"} else if (s_ack_pending == 0U) {", r"} else if (0) {")],
     "2 帧外字节进缓冲": [("Bsp/bsp_openmv.c", r"} else if (!s_in_frame) {", r"} else if (0) {")],

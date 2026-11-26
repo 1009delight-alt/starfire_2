@@ -140,7 +140,7 @@ static void p_motor(void) { UiPage_MotorEnc(&m, 2U); }
 static void p_cal(void)   { UiPage_MotionCal(&m, true, 1U); }
 static void p_gray(void)  { UiPage_Gray(&g, false); }
 static void p_sonar(void) { UiPage_Sonar(&t, true, true); }
-static void p_mv(void)    { UiPage_Openmv(&mv, "COLOR", "TURN"); }
+static void p_mv(void)    { UiPage_Openmv(&mv, "COLOR", "TURN", true); }
 static void p_line(void)  { UiPage_Line(&g, &m, true, "LEFT"); }
 
 int main(int argc, char **argv)

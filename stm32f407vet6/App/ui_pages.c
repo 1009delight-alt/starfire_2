@@ -129,10 +129,14 @@ void UiPage_Sonar(const sonar_state_t *s, bool healthy, bool obstacle)
     BspOled_Footer(buf);
 }
 
-void UiPage_Openmv(const openmv_state_t *mv, const char *cmd_name, const char *ack_name)
+void UiPage_Openmv(const openmv_state_t *mv, const char *cmd_name, const char *ack_name, bool running)
 {
     BspOled_Clear();
-    BspOled_Title(mv->online ? "OPENMV ON" : "OPENMV OFF", mv->online ? OLED_C_GREEN : OLED_C_RED);
+    if (running) {
+        BspOled_Title(mv->online ? "MV RUN" : "MV RUN OFF", mv->online ? OLED_C_GREEN : OLED_C_RED);
+    } else {
+        BspOled_Title(mv->online ? "OPENMV ON" : "OPENMV OFF", mv->online ? OLED_C_CYAN : OLED_C_RED);
+    }
 
     BspOled_Printf(2U, 22U, 2U, "FPS:%3u", (unsigned)mv->fps);
     BspOled_SetColor(OLED_C_GRAY);
@@ -150,7 +154,7 @@ void UiPage_Openmv(const openmv_state_t *mv, const char *cmd_name, const char *a
     BspOled_Printf(2U, 92U, 1U, "PARK cx:%+4d  area:%5u", (int)mv->park_cx, (unsigned)mv->park_area);
 
     BspOled_DrawColorSeq(102U, mv->color_seq, 2U);
-    BspOled_Footer("Short:Task  Long:Reset");
+    BspOled_Footer(running ? "Short:Stop" : "Short:Go  Long:Task");
 }
 
 void UiPage_Line(const gray_state_t *g, const motor_state_t *m, bool running, const char *bias_name)

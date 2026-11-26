@@ -738,6 +738,27 @@ static void case_park_happy(void)
     start_stage(4);
     check(wait_state(ST_PARK_REVERSE, 3000U), "看到 P 牌进入倒库");
     g_cam_park_aligned = false;
+
+    /* 前移、倒车都是定距（2026-11-26 前移加长；倒车试过定时后改回定距） */
+    float fwd0 = BspMotor_GetState()->total_dist_mm;
+    for (uint32_t t = 0U; t < 15000U && Mission_GetState() == ST_PARK_REVERSE &&
+         Mission_GetSubStep() == 0U; t++) { run_ms(1U); }
+    float fwd = BspMotor_GetState()->total_dist_mm - fwd0;
+    check(Mission_GetSubStep() == 1U && fabsf(fwd - CFG_PARK_EXTRA_FWD_MM) < 30.0f,
+          "定距前移 %.0f mm 后转向（设定 %.0f mm）", fwd, CFG_PARK_EXTRA_FWD_MM);
+    for (uint32_t t = 0U; t < 15000U && Mission_GetState() == ST_PARK_REVERSE &&
+         Mission_GetSubStep() != 2U; t++) { run_ms(1U); }
+    check(Mission_GetSubStep() == 2U, "转向完成，进入倒车");
+    float back0 = BspMotor_GetState()->total_dist_mm;
+    run_ms(100U);
+    check(BspMotor_GetState()->target_spd_mm_s[0] < 0.0f && BspMotor_GetState()->target_spd_mm_s[2] < 0.0f,
+          "倒车时左右目标都为负");
+    for (uint32_t t = 0U; t < 15000U && Mission_GetState() == ST_PARK_REVERSE &&
+         Mission_GetSubStep() == 2U; t++) { run_ms(1U); }
+    float back = BspMotor_GetState()->total_dist_mm - back0;
+    check(Mission_GetSubStep() == 3U && fabsf(back + CFG_PARK_BACK_DIST_MM) < 30.0f,
+          "定距倒车 %.0f mm（设定 -%.0f mm）", back, CFG_PARK_BACK_DIST_MM);
+
     check(wait_state(ST_DONE, 20000U), "完成入库进入 DONE");
     check(all_pwm_zero(), "停车");
 }
