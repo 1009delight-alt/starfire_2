@@ -279,12 +279,22 @@
 #define CFG_STAGE_PARK_START_MM         11500.0f
 
 /* ==================== 8. 倒车入库几何参数 ==================== */
+/* 1：找库只认灰度方框横边，随后后退定位；0：保留旧 P 牌/里程触发用于对照 */
+#ifndef CFG_PARK_USE_GRAY_BOX
+#define CFG_PARK_USE_GRAY_BOX           1U
+#endif
+#define CFG_PARK_BOX_ARM_MS             60U    /* 先连续看到正常窄线才布防，避免起跑就压横线误触发 */
+#define CFG_PARK_BOX_CONFIRM_MS         20U    /* is_cross 已由灰度层连续2帧确认；提速后不额外等待，避免漏过窄横边 */
+#define CFG_PARK_BOX_SEARCH_MAX_MM      3000.0f /* 找库最多行驶距离，找不到方框则停车，不按里程强制入库 */
+#define CFG_SPEED_PARK_BOX_MM_S         CFG_SPEED_CRUISE_MM_S /* 找方框与普通循迹同速，随全局倍率调整 */
+#define CFG_PARK_BOX_BACKUP_MM          560.0f /* 第一条方框横边确认后沿原路后退距离 */
+#define CFG_SPEED_PARK_BACKUP_MM_S      130.0f /* 后退定位速度，不乘全局速度倍率 */
 /* OpenMV 上报 $PARK:1,cx,area#：当 area >= 阈值 且 cx 进入对齐窗，锁定 P 牌触发点 */
 #define CFG_PARK_MIN_AREA_PX            160U
 #define CFG_PARK_FRESH_MS               150U    /* 触发入库时最新 PARK 帧（flag=1）必须在多久之内 */
 #define CFG_PARK_ALIGN_CX_MIN           (-25)   /* P 牌进入画面中心偏右/偏左触发窗口 (-100~100) */
 #define CFG_PARK_ALIGN_CX_MAX           35
-#define CFG_PARK_EXTRA_FWD_MM           580.0f  /* 看到对齐点后继续前移，使车中心对齐车库中线（11-26 实车在正对 P 牌处就倒车，原 240，用户实车调到 580） */
+#define CFG_PARK_EXTRA_FWD_MM           680.0f  /* P 牌对齐后前移，再转向倒库；11-26 用户在原 580 mm 基础上增加 100 mm */
 #define CFG_PARK_TURN_ANGLE_DEG         90.0f   /* 原地左转 90°（正值为左转，使车尾正对右侧车库） */
 #define CFG_PARK_BACK_DIST_MM           390.0f  /* 车尾先入直线倒车距离 (mm)，保证车身完全进 40x40cm 框（原 360，11-26 用户实车调到 390；试过定时 1250 ms，改回定距） */
 #define CFG_PARK_HOLD_MS                6000U   /* 赛题要求停稳至少 5s，留 1s 余量（11-26 用户由 5500 改） */

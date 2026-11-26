@@ -6,3 +6,4 @@ tmp/
 *.cbuild*.json
 .clangd
 RTE/_*/
+test/sim/gray_box_sim.exe

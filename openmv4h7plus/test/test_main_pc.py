@@ -142,6 +142,17 @@ check(b.periodic(500, 30) == ["$HB:IDLE,30#"], "500ms 发心跳")
 check(b.command("XYZ") == [] and b.command("CMD:FOO") == [], "未知帧忽略")
 check(b.command(" cmd:turn ") == ["$ACK:TURN#"], "命令不区分大小写、忽略空白")
 
+# ---- 黄色现场样本及暗部试调边界（不代表完整图像识别验收） ----
+for label, lab, expected in (
+    ("本次黄色", (61, -11, 55), 3),
+    ("此前黄色阴影", (59, -19, 29), 3),
+    ("黄色暗部试调边界", (30, -28, 26), 3),
+    ("现场绿色", (76, -53, 32), 1),
+    ("背景B上界", (74, -3, 14), None),
+):
+    matches = [i for i, th in enumerate(m.COLOR_TH) if m.in_th(lab, th)]
+    check(matches == ([] if expected is None else [expected]), label + "阈值匹配")
+
 # ---- 生成 C 联测字节流 ----
 def scene(name, frames):
     if outdir is None:

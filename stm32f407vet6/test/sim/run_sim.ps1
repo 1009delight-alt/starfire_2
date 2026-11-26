@@ -16,7 +16,14 @@ $src  = @(
 )
 $defs = @()
 if ($SpeedScale -ne "") { $defs += "-DCFG_SPEED_SCALE=$($SpeedScale)f" }
-& gcc @defs -std=c11 -Wall -Wextra -Wno-unused-function -O1 -I "$sim\stub" -I "$root\Core\Inc" -I "$root\Bsp" -I "$root\App" -o $out @src -lm
+& gcc @defs -DCFG_PARK_USE_GRAY_BOX=0 -std=c11 -Wall -Wextra -Wno-unused-function -O1 -I "$sim\stub" -I "$root\Core\Inc" -I "$root\Bsp" -I "$root\App" -o $out @src -lm
 if ($LASTEXITCODE -ne 0) { throw "编译失败" }
+& $out
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# 旧P牌回放继续保留；新默认灰度方框流程单独使用同一实码环境检查。
+$src[0] = "$sim\gray_box_sim.c"
+$out = Join-Path $sim "gray_box_sim.exe"
+& gcc @defs -std=c11 -Wall -Wextra -Wno-unused-function -O1 -I "$sim\stub" -I "$root\Core\Inc" -I "$root\Bsp" -I "$root\App" -o $out @src -lm
+if ($LASTEXITCODE -ne 0) { throw "灰度方框编译失败" }
 & $out
 exit $LASTEXITCODE
