@@ -1,0 +1,10 @@
+Mode 0 PASS
+Mode 1 PASS
+Mode 2 PASS
+Mode 3 PASS
+Mode 4 PASS
+Mode 5 PASS
+Mode 6 PASS
+Mode 7 PASS
+Mode 8 PASS
+Mode 9 PASS

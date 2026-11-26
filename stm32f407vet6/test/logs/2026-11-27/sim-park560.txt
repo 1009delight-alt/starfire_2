@@ -1,0 +1,308 @@
+${REPO}\stm32f407vet6\test\sim\sim.c: In function 'BspUart_SendBytes':
+${REPO}\stm32f407vet6\test\sim\sim.c:166:62: warning: '%s' directive output may be truncated writing up to 255 bytes into a region of size 48 [-Wformat-truncation=]
+   71 |     if (id == BSP_UART_MOTOR) { motor_on_tx(tmp); }
+      |                                             ~~~
+......
+  166 |         snprintf(g_last_pwm_frame, sizeof g_last_pwm_frame, "%s", s);
+      |                                                              ^~
+In function 'motor_on_tx',
+    inlined from 'BspUart_SendBytes' at ${REPO}\stm32f407vet6\test\sim\sim.c:71:33:
+${REPO}\stm32f407vet6\test\sim\sim.c:166:9: note: 'snprintf' output between 1 and 256 bytes into a destination of size 48
+  166 |         snprintf(g_last_pwm_frame, sizeof g_last_pwm_frame, "%s", s);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+== 1 相机重启后恢复任务
+ok  : 起跑后相机处于 TURN   [t=1965 ms, state=FORK_PASS]
+ok  : 相机报 HB:IDLE 后主控重发 $CMD:TURN#（重发 1 次）   [t=2865 ms, state=FORK_WAIT]
+ok  : 相机回到 TURN   [t=2865 ms, state=FORK_WAIT]
+ok  : resync_count = 1   [t=2865 ms, state=FORK_WAIT]
+
+== 2 四色报文校验
+ok  : 相机已确认 COLOR   [t=2005 ms, state=COLOR_SCAN]
+ok  : 缺 $ 的残帧（内容也不合法）被丢弃   [t=2010 ms, state=COLOR_SCAN]
+ok  : 缺 $ 的残帧（内容合法）也被丢弃   [t=2015 ms, state=COLOR_SCAN]
+ok  : 数量与序列不符的帧被丢弃   [t=2020 ms, state=COLOR_SCAN]
+ok  : 序列多于数量的帧被丢弃   [t=2025 ms, state=COLOR_SCAN]
+ok  : 合法帧 R 被接受   [t=2030 ms, state=COLOR_SCAN]
+ok  : 不以已有序列开头的帧被丢弃   [t=2035 ms, state=COLOR_SCAN]
+ok  : R-G 被接受   [t=2040 ms, state=COLOR_SCAN]
+ok  : 相机与主控都为 R-G   [t=2045 ms, state=COLOR_SCAN]
+ok  : 不连续的 1,B 不覆盖 R-G   [t=2050 ms, state=COLOR_SCAN]
+ok  : 相机重启后被拉回 COLOR   [t=2950 ms, state=COLOR_SCAN]
+ok  : 主控下发的是续接命令 $CMD:COLOR:R-G#（收到 1 次）   [t=2950 ms, state=COLOR_SCAN]
+ok  : 相机按续接恢复为 R-G   [t=2950 ms, state=COLOR_SCAN]
+ok  : 相机续接后自己数出的 R-G-B-Y 被锁存（主控为 R-G-B-Y）   [t=2955 ms, state=COLOR_SCAN]
+
+== 4a 入库定距动作中编码器冻结
+ok  : 看到 P 牌进入倒库   [t=1245 ms, state=PARK_REV]
+ok  : 冻结后报 ENC_STALL，用时 620 ms   [t=1865 ms, state=ENC_STALL]
+ok  : 电机指令已归零   [t=2165 ms, state=ENC_STALL]
+
+== 4b 循迹中编码器冻结
+ok  : 正在循迹   [t=2585 ms, state=TRACK_OBS]
+ok  : 循迹中冻结报 ENC_STALL，用时 780 ms   [t=3365 ms, state=ENC_STALL]
+ok  : 电机指令已归零   [t=3665 ms, state=ENC_STALL]
+
+== 4c 轮子极慢、到不了目标
+ok  : 进入倒库   [t=1285 ms, state=PARK_REV]
+ok  : 动作超时报 MOTION_TMO，用时 10840 ms   [t=12125 ms, state=MOTION_TMO]
+ok  : 电机指令已归零   [t=12425 ms, state=MOTION_TMO]
+
+== 5 分岔重跑不沿用旧方向
+ok  : 第一次锁定 L   [t=2665 ms, state=FORK_PASS]
+ok  : 按键急停   [t=2705 ms, state=KEY_STOP]
+ok  : 回到待机   [t=2745 ms, state=IDLE>FORK]
+ok  : 重跑开始时不锁旧方向（当前 -）   [t=2845 ms, state=FORK_PASS]
+ok  : 最终锁定本轮的 R（当前 R）   [t=5345 ms, state=FORK_PASS]
+ok  : 起跑前驱动层留有旧方向 L   [t=1545 ms, state=IDLE>FULL]
+ok  : 任务未重发时也不锁旧方向（当前 -）   [t=1685 ms, state=FORK_PASS]
+
+== 6 P 牌对齐后同周期丢失
+ok  : 相机已确认 PARK   [t=2045 ms, state=PARK_FIND]
+ok  : 最新一帧为丢失时不开始倒库   [t=2119 ms, state=PARK_FIND]
+ok  : 最新一帧为对齐时开始倒库   [t=2120 ms, state=PARK_REV]
+
+== 7 正常入库流程
+ok  : 看到 P 牌进入倒库   [t=1245 ms, state=PARK_REV]
+ok  : 定距前移 676 mm 后转向（设定 680 mm）   [t=4640 ms, state=PARK_REV]
+ok  : 转向完成，进入倒车   [t=6540 ms, state=PARK_REV]
+ok  : 倒车时左右目标都为负   [t=6640 ms, state=PARK_REV]
+ok  : 定距倒车 -384 mm（设定 -390 mm）   [t=9700 ms, state=PARK_REV]
+ok  : 完成入库进入 DONE   [t=15700 ms, state=DONE]
+ok  : 停车   [t=15700 ms, state=DONE]
+
+== 8 畸形帧表
+ok  : 相机已确认 PARK   [t=2045 ms, state=PARK_FIND]
+ok  : 24 条畸形帧全部丢弃且状态不变   [t=2520 ms, state=PARK_FIND]
+ok  : $MAll 带多余字符整帧丢弃   [t=2521 ms, state=PARK_FIND]
+ok  : 对照：合法的 $PARK:1,0,300# 触发倒库   [t=2540 ms, state=PARK_REV]
+
+== 9 分岔左右选线
+ok  : 锁定 L   [t=3805 ms, state=FORK_PASS]
+      左轮目标 -210 mm/s，右轮目标 526 mm/s
+ok  : 锁 L：左轮比右轮慢（差 -736 mm/s）   [t=3805 ms, state=FORK_PASS]
+ok  : 锁定 R   [t=6565 ms, state=FORK_PASS]
+      左轮目标 543 mm/s，右轮目标 -257 mm/s
+ok  : 锁 R（重跑）：右轮比左轮慢（差 800 mm/s）   [t=6565 ms, state=FORK_PASS]
+
+== 10 灰度装反与极性
+ok  : 装反=0 黑为低=0：线在左 → 误差 -3.00 < 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=0 黑为低=0：双线偏右 → 误差 3.00 > 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=0 黑为低=1：线在左 → 误差 -3.00 < 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=0 黑为低=1：双线偏右 → 误差 3.00 > 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1 黑为低=0：线在左 → 误差 -3.00 < 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1 黑为低=0：双线偏右 → 误差 3.00 > 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1 黑为低=1：线在左 → 误差 -3.00 < 0   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1 黑为低=1：双线偏右 → 误差 3.00 > 0   [t=6565 ms, state=FORK_PASS]
+
+== 11 灰度坏通道屏蔽
+ok  : 装反=0：坏通道单独读黑被忽略（bits=0x00）   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=0：两侧压线时补上，不判分岔（bits=0xE0 误差 2.50）   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=0：其他通道照常（bits=0x10 误差 0.50）   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1：坏通道单独读黑被忽略（bits=0x00）   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1：两侧压线时补上，不判分岔（bits=0xE0 误差 2.50）   [t=6565 ms, state=FORK_PASS]
+ok  : 装反=1：其他通道照常（bits=0x10 误差 0.50）   [t=6565 ms, state=FORK_PASS]
+
+== 12 循迹微分低通
+ok  : 复位后第一拍只有 P 项（差速 100.0，P 100.0）   [t=45 ms, state=IDLE>FULL]
+ok  : 误差跳格时 D 项峰值 10.6 < 不滤波时 50.0 的一半   [t=45 ms, state=IDLE>FULL]
+
+== 13 内侧轮制动
+ok  : 被拖的内侧轮输出制动 PWM（最低 -200）   [t=1745 ms, state=IDLE>FULL]
+ok  : 制动 PWM 不超过限幅 200   [t=1745 ms, state=IDLE>FULL]
+ok  : 外侧轮仍正向驱动（1311）   [t=1745 ms, state=IDLE>FULL]
+
+== 14 直角弯
+ok  : 丢线找线差速 -300，方向向左且不超过 300   [t=45 ms, state=IDLE>FULL]
+ok  : 降速连续：误差 0.5 → 131.6（应 131.6），1.5 → 114.8（应 114.8）   [t=45 ms, state=IDLE>FULL]
+ok  : 目标过零后的第一拍左轮 PWM 为反向（-702）   [t=1900 ms, state=IDLE>FULL]
+
+== 15 超声与固定相机
+ok  : 复位后离线、无有效读数   [t=2200 ms, state=IDLE>FULL]
+ok  : 回波 -> 距离换算（500 mm -> 500）   [t=2200 ms, state=IDLE>FULL]
+ok  : 无目标回波记为空旷且不算近   [t=2200 ms, state=IDLE>FULL]
+ok  : 单次近读数被中值滤掉（hits=0）   [t=2200 ms, state=IDLE>FULL]
+ok  : 一次近读数不进入触发距离（hits=0）   [t=2200 ms, state=IDLE>FULL]
+ok  : 两次近读数后中值进入触发距离（200 mm）   [t=2200 ms, state=IDLE>FULL]
+ok  : 连续近读数达到确认次数（hits=2）   [t=2200 ms, state=IDLE>FULL]
+ok  : 近距中漏一次回波不清零（hits=3）   [t=2200 ms, state=IDLE>FULL]
+ok  : 连续两次空旷后清零   [t=2200 ms, state=IDLE>FULL]
+ok  : 起跑分岔段后立即下发 TURN（无云台等待）   [t=1165 ms, state=FORK_PASS]
+ok  : 避障段起跑后在循迹   [t=1325 ms, state=TRACK_OBS]
+ok  : 超声失效急停（SONAR_LOST）   [t=1385 ms, state=SONAR_LOST]
+ok  : 急停后 PWM 全零   [t=1385 ms, state=SONAR_LOST]
+ok  : 超声失效时不起跑（WAIT:SONAR）   [t=1085 ms, state=WAIT:SONAR]
+
+== 16 丢线转角保护
+ok  : 丢线后报 LINE_LOST（LINE_LOST）   [t=2945 ms, state=LINE_LOST]
+ok  : 停下前转过 187°，不超过 180° 太多   [t=2945 ms, state=LINE_LOST]
+ok  : 是转角先到限（丢线后前进 95 mm）   [t=2945 ms, state=LINE_LOST]
+
+== 17 路口直行
+ok  : 装反=0：正常压线不判路口（误差 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=0：左侧 T 字第一帧（未确认）误差已保持 0.50（得 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=0：T 字第 1 帧还不置路口标志   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=0：左侧 T 字连续 2 帧判路口，误差保持 0.50（得 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=0：十字判路口，误差和方向记忆都不变（0.50 / 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=0：横线残段与主线分开时跟主线（误差 2.00 > 0）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=0：分岔不算路口，偏右选线照常（误差 2.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：正常压线不判路口（误差 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：左侧 T 字第一帧（未确认）误差已保持 0.50（得 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：T 字第 1 帧还不置路口标志   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：左侧 T 字连续 2 帧判路口，误差保持 0.50（得 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：十字判路口，误差和方向记忆都不变（0.50 / 0.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：横线残段与主线分开时跟主线（误差 2.00 > 0）   [t=2945 ms, state=LINE_LOST]
+ok  : 装反=1：分岔不算路口，偏右选线照常（误差 2.50）   [t=2945 ms, state=LINE_LOST]
+ok  : 循迹压上左侧 T 字：差速仍按原偏差向右（50.0 mm/s），不拐进支线   [t=45 ms, state=IDLE>FULL]
+
+== 18 循迹 P 变增益
+ok  : 误差 0.5 / 2.5：P 50.0 / 250.0（按配置应 50.0 / 250.0）   [t=45 ms, state=IDLE>FULL]
+ok  : 左右对称   [t=45 ms, state=IDLE>FULL]
+ok  : 0~3.8 单调增，不会偏得越多纠得越少   [t=45 ms, state=IDLE>FULL]
+
+== 19 灰度回差与两帧确认
+ok  : 白 → 略低于阈值（1960，阈值 2000）仍判白   [t=45 ms, state=IDLE>FULL]
+ok  : 越过 阈值−回差（1900）才变黑   [t=45 ms, state=IDLE>FULL]
+ok  : 黑 → 略高于阈值（2040）仍判黑   [t=45 ms, state=IDLE>FULL]
+ok  : 越过 阈值+回差（2100）才变白   [t=45 ms, state=IDLE>FULL]
+ok  : 全白第 1 帧不算丢线，误差保持 3.00（得 3.00）   [t=45 ms, state=IDLE>FULL]
+ok  : 连续 2 帧全白才丢线，向右找线，误差从 3.00 往 3.8 靠（得 3.12）   [t=45 ms, state=IDLE>FULL]
+ok  : 见到线一帧就算找回   [t=45 ms, state=IDLE>FULL]
+ok  : 上电全白不算找到线   [t=45 ms, state=IDLE>FULL]
+
+== 20 路口保持封顶
+ok  : 压过短横线照常循迹（TRACK_OBS）   [t=1885 ms, state=TRACK_OBS]
+ok  : 一直整排压黑最终报 LINE_LOST（LINE_LOST）   [t=5005 ms, state=LINE_LOST]
+ok  : 停下前只走了 334 mm   [t=5005 ms, state=LINE_LOST]
+
+== 21 回线前清灰度状态
+ok  : 看到障碍进入避障   [t=1945 ms, state=AVOID_OBS]
+ok  : 回线搜索的全白帧从不被当成有线   [t=10080 ms, state=REJOIN_FAIL]
+ok  : 一直找不到线报 REJOIN_FAIL（REJOIN_FAIL）   [t=10080 ms, state=REJOIN_FAIL]
+
+== 22 丢线误差平滑
+ok  : 确认丢线第一帧误差 -1.00，没有一步跳到 -3.8   [t=10080 ms, state=REJOIN_FAIL]
+ok  : 每帧最多变 0.50   [t=10080 ms, state=REJOIN_FAIL]
+ok  : 误差单调往左、不越过 -3.8   [t=10080 ms, state=REJOIN_FAIL]
+ok  : 约 40 帧后到边界附近（-3.79）   [t=10080 ms, state=REJOIN_FAIL]
+ok  : 见到线误差立即为实测 1.50（得 1.50）   [t=10080 ms, state=REJOIN_FAIL]
+
+== 23 运动尖峰
+ok  : 目标 +10 → -10，PWM 194 → -146，没有 ±350 硬切换   [t=565 ms, state=IDLE>FULL]
+ok  : 起步第一拍 PWM 582，没有一步到满速对应的输出   [t=645 ms, state=IDLE>FULL]
+ok  : 之后每拍最多增 234   [t=645 ms, state=IDLE>FULL]
+ok  : 400 ms 内加到 331 mm/s   [t=645 ms, state=IDLE>FULL]
+ok  : BspMotor_Stop 立即发零 PWM，不受加速度限制   [t=645 ms, state=IDLE>FULL]
+ok  : 停车后再起步第一拍 PWM 572，不沿用停车前的速度   [t=965 ms, state=IDLE>FULL]
+ok  : 找回线那一拍差速 150，约等于 P 项 150   [t=45 ms, state=IDLE>FULL]
+ok  : 路口保持结束那一拍差速 -300，约等于 P 项 -300   [t=45 ms, state=IDLE>FULL]
+
+== 24 审查问题
+ok  : 正在找库（PARK_FIND）   [t=1845 ms, state=PARK_FIND]
+ok  : 找线目标 52 mm/s，低于堵转门槛 60   [t=2045 ms, state=PARK_FIND]
+ok  : 低速找线时冻结报 ENC_STALL（ENC_STALL），用时 660 ms   [t=2705 ms, state=ENC_STALL]
+ok  : 电机指令已归零   [t=3005 ms, state=ENC_STALL]
+ok  : 从没收到反馈也报超时并归零（fault=1，M1 PWM 0）   [t=1145 ms, state=WAIT:ENC]
+ok  : 反馈中断后故障锁存   [t=1145 ms, state=WAIT:ENC]
+ok  : 故障时开环 750 只发出零帧（M1 PWM 0）   [t=1145 ms, state=WAIT:ENC]
+ok  : 主线居中斜入 T 字，路口保持差速 0（未被支线拉偏）   [t=45 ms, state=WAIT:ENC]
+ok  : 整排压黑时保持误差 1.00，左/右目标 223 / 23，右轮不反转   [t=45 ms, state=WAIT:ENC]
+ok  : 看到障碍进入避障   [t=1945 ms, state=AVOID_OBS]
+ok  : 整片黑不算回线，报 REJOIN_FAIL（REJOIN_FAIL / REJOIN_FAIL）   [t=10085 ms, state=REJOIN_FAIL]
+
+== 25 二次审查
+ok  : 内侧轮目标 -35.2 mm/s、实测 -36.2 mm/s，5 s 不报堵转（stall_wheel=0）   [t=5245 ms, state=IDLE>FULL]
+ok  : 一直 4 路宽线最终报 LINE_LOST（LINE_LOST）   [t=4685 ms, state=LINE_LOST]
+ok  : 停下前只走了 336 mm   [t=4685 ms, state=LINE_LOST]
+
+== 26 三次审查
+ok  : 看到障碍进入避障   [t=1945 ms, state=AVOID_OBS]
+ok  : 两段分开的线不算回线（REJOIN_FAIL / REJOIN_FAIL）   [t=10085 ms, state=REJOIN_FAIL]
+ok  : 路口第一拍差速 100.0（应只有 P 100.0），右轮目标 23.2 不反转   [t=45 ms, state=IDLE>FULL]
+ok  : 路口后闪白一帧，误差 1.00、差速 100.0，右轮目标 23.2 不反转   [t=45 ms, state=IDLE>FULL]
+
+== 27 四次审查
+ok  : 宽线夹单帧白最终报 LINE_LOST（LINE_LOST）   [t=4785 ms, state=LINE_LOST]
+ok  : 停下前只走了 340 mm   [t=4785 ms, state=LINE_LOST]
+ok  : 参考跑：色块段 → 找库段在 11909 mm   [t=14685 ms, state=PARK_FIND]
+ok  : 全白前仍在色块段（COLOR_SCAN）   [t=14125 ms, state=COLOR_SCAN]
+ok  : 丢线途中切进了找库段   [t=18625 ms, state=LINE_LOST]
+ok  : 跨段丢线按首次全白起算报 LINE_LOST，走了 257 mm（LINE_LOST）   [t=18625 ms, state=LINE_LOST]
+ok  : 参考跑：里程兜底入库在 13707 mm   [t=11825 ms, state=PARK_ODOM]
+ok  : 丢线时不按里程入库，最终报 LINE_LOST（LINE_LOST / LINE_LOST）   [t=16105 ms, state=LINE_LOST]
+ok  : 丢线中越过兜底点 83 mm 也不入库   [t=13745 ms, state=PARK_FIND]
+ok  : 找回线后照常入库（PARK_FIND）   [t=13765 ms, state=PARK_ODOM]
+
+== 28 急停重跑清灰度
+ok  : 按键急停   [t=1425 ms, state=KEY_STOP]
+ok  : 回到待机   [t=1465 ms, state=IDLE>FULL]
+ok  : 已重新起跑（TRACK_OBS）   [t=1500 ms, state=TRACK_OBS]
+ok  : 全白第一拍不算有线、不转向（误差 0.00，左/右 91.0 / 91.0）   [t=1500 ms, state=TRACK_OBS]
+
+== 29 左右对调与转向响应
+ok  : 左前 500 发成 $pwm:500,0,0,0#（SWAP_LR=0 应 $pwm:500,0,0,0#）   [t=245 ms, state=IDLE>FULL]
+ok  : 直行时按位置测到的轮速 155 / 160，里程 92 mm 为正   [t=945 ms, state=IDLE>FULL]
+      左轮实际换向用时 59 ms
+ok  : 左轮目标换向后 59 ms 实际转正   [t=2104 ms, state=IDLE>FULL]
+
+== 30 两段斜行避障
+ok  : 看到障碍进入避障   [t=1945 ms, state=AVOID_OBS]
+ok  : 两段斜行：没走转平行、平行两步   [t=10085 ms, state=REJOIN_FAIL]
+ok  : 斜回航向 40.5°（按指令应约 40.0°）   [t=10085 ms, state=REJOIN_FAIL]
+
+== 31 避障单项回线后继续循迹
+ok  : 起跑循迹（TRACK_OBS）   [t=1885 ms, state=TRACK_OBS]
+ok  : 看到障碍进入避障   [t=1905 ms, state=AVOID_OBS]
+ok  : 回线后继续循迹（TRACK_OBS）   [t=7585 ms, state=TRACK_OBS]
+ok  : 1 s 后仍在循迹、电机在转   [t=8585 ms, state=TRACK_OBS]
+
+== 32 整圈调试模式
+ok  : 起跑后立即避障，不等 150 mm（AVOID_OBS，走了 0 mm）   [t=1085 ms, state=AVOID_OBS]
+ok  : 回线后继续循迹（TRACK_OBS）   [t=6765 ms, state=TRACK_OBS]
+ok  : 回线后走够 150 mm 才再次避障（AVOID_OBS）   [t=7265 ms, state=AVOID_OBS]
+
+== 33 提速：避障预减速、积分抗饱和（巡航 364）
+ok  : 远处障碍不减速（目标 364）   [t=2585 ms, state=TRACK_OBS]
+ok  : 无效读数不减速（目标 364）   [t=2785 ms, state=TRACK_OBS]
+ok  : 读数 480 mm 时基速降到 280（目标 280，实测 274）   [t=3185 ms, state=TRACK_OBS]
+ok  : 照常触发避障（TRACK_OBS）   [t=3205 ms, state=AVOID_OBS]
+ok  : 重负载时 PWM 顶到上限（3000）   [t=2245 ms, state=IDLE>FULL]
+ok  : 负载去掉、目标降到 200 后 200 ms 轮速 238、PWM 1095 已回落   [t=2445 ms, state=IDLE>FULL]
+
+187/187 passed
+In file included from ${REPO}\stm32f407vet6\test\sim\gray_box_sim.c:3:
+${REPO}\stm32f407vet6\test\sim\sim.c: In function 'BspUart_SendBytes':
+${REPO}\stm32f407vet6\test\sim\sim.c:166:62: warning: '%s' directive output may be truncated writing up to 255 bytes into a region of size 48 [-Wformat-truncation=]
+   71 |     if (id == BSP_UART_MOTOR) { motor_on_tx(tmp); }
+      |                                             ~~~
+......
+  166 |         snprintf(g_last_pwm_frame, sizeof g_last_pwm_frame, "%s", s);
+      |                                                              ^~
+In function 'motor_on_tx',
+    inlined from 'BspUart_SendBytes' at ${REPO}\stm32f407vet6\test\sim\sim.c:71:33:
+${REPO}\stm32f407vet6\test\sim\sim.c:166:9: note: 'snprintf' output between 1 and 256 bytes into a destination of size 48
+  166 |         snprintf(g_last_pwm_frame, sizeof g_last_pwm_frame, "%s", s);
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ok  : 前面赛段遇到横线不触发倒库   [t=1185 ms, state=TRACK_OBS]
+ok  : 确认本次相机实际离线   [t=2045 ms, state=PARK_BOX]
+ok  : PARK 单项不要求相机在线   [t=2045 ms, state=PARK_BOX]
+ok  : 方框找库不请求 P 牌识别   [t=2165 ms, state=PARK_BOX]
+ok  : P 牌帧不触发灰度倒库   [t=2205 ms, state=PARK_BOX]
+ok  : 单帧全黑干扰不触发   [t=2285 ms, state=PARK_BOX]
+ok  : 连续横线触发第一步后退   [t=2325 ms, state=PARK_BACK]
+ok  : 先沿原路后退，不再前进680毫米   [t=2365 ms, state=PARK_BACK]
+ok  : 后退约560毫米后才开始转向（实测 562）   [t=6720 ms, state=PARK_TURN]
+ok  : 转向、倒车390毫米、停稳后DONE   [t=17780 ms, state=DONE]
+ok  : 完成后电机归零   [t=17780 ms, state=DONE]
+ok  : 没有方框即使P牌存在也不倒库，到搜索上限报BOX_MISS   [t=10325 ms, state=BOX_MISS]
+ok  : 找不到方框后停车   [t=10325 ms, state=BOX_MISS]
+ok  : 起跑已经压横线时不立即触发，必须先正常窄线布防   [t=1345 ms, state=PARK_BOX]
+ok  : 冻结测试进入后退   [t=2205 ms, state=PARK_BACK]
+ok  : 后退时编码器冻结仍急停   [t=2965 ms, state=ENC_STALL]
+ok  : 冻结急停归零   [t=2965 ms, state=ENC_STALL]
+ok  : 按键测试进入后退   [t=2205 ms, state=PARK_BACK]
+ok  : 后退途中按键立即停车   [t=2245 ms, state=KEY_STOP]
+ok  : 找框基速与普通巡航一致（364毫米/秒）   [t=2165 ms, state=PARK_BOX]
+ok  : 提速后短横边仍能触发，不漏过50ms黑线   [t=2215 ms, state=PARK_BACK]
+
+GRAY_BOX 21/21 passed

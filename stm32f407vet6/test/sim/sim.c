@@ -200,6 +200,7 @@ static uint32_t g_cam_last_hb = 0U;
 static uint32_t g_cam_last_turn = 0U;
 static char g_cam_turn_answer = 0;      /* TURN 任务进入 200 ms 后开始回的方向；0 = 不回 */
 static bool g_cam_park_aligned = false; /* PARK 任务下每 50 ms 回 $PARK:1,0,300# */
+static bool g_cam_disabled = false;
 static uint32_t g_cam_last_park = 0U;
 static int  g_cam_cmd_count[8];         /* 0 IDLE 1 TURN 2 COLOR 3 PARK 4 RESET 5 QUERY 6 COLOR:续接 */
 static char g_cam_order[8];             /* 相机自己数到的颜色，如 "RGB"；重启清空 */
@@ -263,6 +264,7 @@ static void cam_color_resume(const char *seq_dash)
 
 static void cam_on_tx(const char *s)
 {
+    if (g_cam_disabled) { return; }
     static const char *names[] = { "IDLE", "TURN", "COLOR", "PARK", "RESET", "QUERY" };
     const char *p = s;
     while ((p = strstr(p, "$CMD:")) != NULL) {
@@ -296,6 +298,7 @@ static void cam_restart(void)
 
 static void cam_world_1ms(void)
 {
+    if (g_cam_disabled) { return; }
     if ((g_now - g_cam_last_hb) >= 500U) {
         char hb[24];
         snprintf(hb, sizeof hb, "HB:%s,25", g_cam_task);
@@ -327,6 +330,7 @@ static void sim_reset_world(void)
     memset(g_raw_out, 0, sizeof g_raw_out);
     memset(g_cam_cmd_count, 0, sizeof g_cam_cmd_count);
     g_enc_frozen = false; g_enc_silent = false; g_load = 1.0f; g_line = true; g_obstacle = false; g_sonar_ok = true;
+    g_cam_disabled = false;
     g_cam_turn_answer = 0; g_cam_park_aligned = false;
     g_cam_order[0] = '\0'; g_cam_last_seed[0] = '\0';
     g_gray_scripted = false;

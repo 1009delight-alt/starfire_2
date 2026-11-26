@@ -17,6 +17,11 @@ SRCS = ('App/mission_fsm.c', 'App/motion_ctrl.c', 'Bsp/bsp_motor.c', 'Bsp/bsp_op
         'Bsp/sonar_logic.c')
 
 MUTS = {
+    "35 方框后错误前进": [("App/mission_fsm.c", r"Motion_StartDriveDist(-CFG_PARK_BOX_BACKUP_MM,", r"Motion_StartDriveDist(CFG_PARK_BOX_BACKUP_MM,")],
+    "35 单帧横线就触发": [("App/mission_fsm.c", r"} else if (gray->is_cross) {", r"} else if (gray->held) {"),
+                          ("App/mission_fsm.c", r"s_park_box_cross_ms >= CFG_PARK_BOX_CONFIRM_MS", r"s_park_box_cross_ms >= CFG_MAIN_CTRL_PERIOD_MS")],
+    "35 找框超程不停车": [("App/mission_fsm.c", r"stage_dist >= CFG_PARK_BOX_SEARCH_MAX_MM", r"false")],
+    "35 起跑横线立即布防": [("App/mission_fsm.c", r"        s_park_box_armed = false;", r"        s_park_box_armed = true;")],
     "33 倒车方向写反": [("App/mission_fsm.c", r"Motion_StartDriveDist(-CFG_PARK_BACK_DIST_MM,", r"Motion_StartDriveDist(CFG_PARK_BACK_DIST_MM,")],
     "33 P牌后不前移": [("App/mission_fsm.c", r"Motion_StartDriveDist(CFG_PARK_EXTRA_FWD_MM,", r"Motion_StartDriveDist(0.0f,")],
     # 上一轮的 6 处
@@ -128,8 +133,9 @@ for name, muts in MUTS.items():
         assert old in s, (name, old)
         open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
     exe = os.path.join(work, 'm.exe')
-    srcs = [os.path.join(sim, 'sim.c')] + [os.path.join(d, x) for x in SRCS]
-    cmd = ['gcc', '-std=c11', '-w', '-O0', '-I', os.path.join(sim, 'stub'),
+    box_case = name.startswith('35 ')
+    srcs = [os.path.join(sim, 'gray_box_sim.c' if box_case else 'sim.c')] + [os.path.join(d, x) for x in SRCS]
+    cmd = ['gcc', '-DCFG_PARK_USE_GRAY_BOX=' + ('1' if box_case else '0'), '-std=c11', '-w', '-O0', '-I', os.path.join(sim, 'stub'),
            '-I', os.path.join(d, 'Core', 'Inc'), '-I', os.path.join(d, 'Bsp'),
            '-I', os.path.join(d, 'App'), '-o', exe] + srcs + ['-lm']
     # 本机 gcc 偶发 internal compiler error / 临时文件写失败，与变异无关：重试两次

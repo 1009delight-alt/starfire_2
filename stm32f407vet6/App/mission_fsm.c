@@ -68,6 +68,11 @@ static float    s_color_done_mm = 0.0f;
 static bool     s_corner4_valid = false;
 static float    s_corner4_mm = 0.0f;
 static bool     s_park_by_odom = false;
+#if (CFG_PARK_USE_GRAY_BOX != 0U)
+static bool     s_park_box_armed = false;
+static uint32_t s_park_box_narrow_ms = 0U;
+static uint32_t s_park_box_cross_ms = 0U;
+#endif
 
 /* 弯道识别：每走 CORNER_SAMPLE_MM 记一个 (里程, 航向) 样本 */
 #define CORNER_SAMPLE_MM    20.0f
@@ -211,14 +216,24 @@ static void enter_state(mission_state_t next, uint32_t now_ms)
 
     case ST_PARK_SEARCH:
         s_park_by_odom = false;
+#if (CFG_PARK_USE_GRAY_BOX != 0U)
+        s_park_box_armed = false;
+        s_park_box_narrow_ms = s_park_box_cross_ms = 0U;
+        view_set(OPENMV_TASK_IDLE);
+#else
         view_set(OPENMV_TASK_PARK);
+#endif
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
         break;
 
     case ST_PARK_REVERSE:
         view_set(OPENMV_TASK_IDLE);
         s_park_step = PARK_STEP_EXTRA_FWD;
+#if (CFG_PARK_USE_GRAY_BOX != 0U)
+        Motion_StartDriveDist(-CFG_PARK_BOX_BACKUP_MM, CFG_SPEED_PARK_BACKUP_MM_S);
+#else
         Motion_StartDriveDist(CFG_PARK_EXTRA_FWD_MM, CFG_SPEED_PARK_SEARCH_MM_S);
+#endif
         Board_LedSetPattern(LED_PAT_FAST_BLINK);
         break;
 
@@ -286,7 +301,11 @@ static const char *check_start_ready(uint32_t now_ms)
     }
 #endif
 #if (CFG_REQUIRE_MV_ONLINE_TO_START != 0U) && (CFG_ENABLE_OPENMV != 0U)
-    if (!track_loop_profile() && !mv->online) {
+    if (!track_loop_profile() && !mv->online
+#if (CFG_PARK_USE_GRAY_BOX != 0U)
+        && (s_start_stage != START_PARK)
+#endif
+    ) {
         return "WAIT:MV";
     }
 #endif
@@ -641,6 +660,36 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
         break;
 
     case ST_PARK_SEARCH: {
+#if (CFG_PARK_USE_GRAY_BOX != 0U)
+        Motion_LineFollowStep(CFG_SPEED_PARK_BOX_MM_S, GRAY_BIAS_CENTER, dt_s);
+        if (check_line_lost()) { break; }
+        if (corner_update() &&
+            ((mot->total_dist_mm - s_color_enter_mm) >= CFG_CORNER4_MIN_AFTER_COLOR_MM)) {
+            s_corner4_valid = true;
+            s_corner4_mm = mot->total_dist_mm;
+        }
+        const gray_state_t *gray = BspGray_GetState();
+        if (Motion_IsLineLost()) {
+            s_park_box_armed = false;
+            s_park_box_narrow_ms = s_park_box_cross_ms = 0U;
+        } else if (!s_park_box_armed) {
+            if (s_corner4_valid && gray->line_found && !gray->held && !gray->is_cross &&
+                gray->black_count > 0U && gray->black_count <= CFG_GRAY_LINE_MAX_BLACK) {
+                s_park_box_narrow_ms += CFG_MAIN_CTRL_PERIOD_MS;
+                if (s_park_box_narrow_ms >= CFG_PARK_BOX_ARM_MS) { s_park_box_armed = true; }
+            } else { s_park_box_narrow_ms = 0U; }
+        } else if (gray->is_cross) {
+            s_park_box_cross_ms += CFG_MAIN_CTRL_PERIOD_MS;
+            if (s_park_box_cross_ms >= CFG_PARK_BOX_CONFIRM_MS) {
+                BspMotor_Stop();
+                enter_state(ST_PARK_REVERSE, now_ms);
+                break;
+            }
+        } else { s_park_box_cross_ms = 0U; }
+        if (stage_dist >= CFG_PARK_BOX_SEARCH_MAX_MM) {
+            Mission_RequestEmergencyStop("BOX_MISS");
+        }
+#else
         Motion_LineFollowStep(CFG_SPEED_PARK_SEARCH_MM_S, GRAY_BIAS_CENTER, dt_s);
         if (check_line_lost()) {
             break;
@@ -668,6 +717,7 @@ void Mission_Step20ms(uint32_t now_ms, float dt_s)
             BspMotor_Stop();
             enter_state(ST_PARK_REVERSE, now_ms);
         }
+#endif
         break;
     }
 
@@ -708,8 +758,20 @@ const char *Mission_GetStateName(void)
     case ST_AVOID_OBS:    return "AVOID_OBS";
     case ST_FORK_PASS:    return s_fork_waiting ? "FORK_WAIT" : "FORK_PASS";
     case ST_COLOR_SCAN:   return "COLOR_SCAN";
-    case ST_PARK_SEARCH:  return "PARK_FIND";
+    case ST_PARK_SEARCH:
+#if (CFG_PARK_USE_GRAY_BOX != 0U)
+        return "PARK_BOX";
+    case ST_PARK_REVERSE:
+        switch (s_park_step) {
+        case PARK_STEP_EXTRA_FWD: return "PARK_BACK";
+        case PARK_STEP_TURN_90: return "PARK_TURN";
+        case PARK_STEP_BACK_IN: return "PARK_IN";
+        default: return "PARK_HOLD";
+        }
+#else
+        return "PARK_FIND";
     case ST_PARK_REVERSE: return s_park_by_odom ? "PARK_ODOM" : "PARK_REV";
+#endif
     case ST_DONE:         return s_park_by_odom ? "DONE*" : "DONE";
     case ST_FAULT:        return s_fault_reason;
     default:              return "UNK";
