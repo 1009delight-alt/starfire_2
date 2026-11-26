@@ -171,7 +171,7 @@
  * 逐级加，每级用车上记录核对误差分布、丢线和轮速是否跟得上。原地转向、倒车、找线最低速不乘
  * （避障转回修正、入库距离按现在的转速实测）。改速度后等效轮径要按新速度重新标定 */
 #ifndef CFG_SPEED_SCALE                 /* 回放可用 -DCFG_SPEED_SCALE=1.5f 覆盖 */
-#define CFG_SPEED_SCALE                 1.3f
+#define CFG_SPEED_SCALE                 1.5f
 #endif
 #define CFG_SPEED_CRUISE_BASE_MM_S      280.0f  /* 常规直道/前两弯巡航速度 */
 #define CFG_SPEED_FORK_BASE_MM_S        190.0f  /* 路牌识别与分岔口速度 */
