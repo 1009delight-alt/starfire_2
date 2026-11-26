@@ -21,7 +21,7 @@ void BspUart_Init(bsp_uart_id_t id, uint32_t baudrate)
 {
     GPIO_InitTypeDef gpio = {0};
     USART_TypeDef *inst = NULL;
-    IRQn_Type irqn = USART1_IRQn;
+    IRQn_Type irqn;
     uint32_t prio = 2U;
 
     if (id >= BSP_UART_COUNT) {
@@ -29,16 +29,19 @@ void BspUart_Init(bsp_uart_id_t id, uint32_t baudrate)
     }
 
     if (id == BSP_UART_OPENMV) {
-        __HAL_RCC_GPIOA_CLK_ENABLE();
-        __HAL_RCC_USART1_CLK_ENABLE();
-        gpio.Pin = OPENMV_UART_TX_PIN | OPENMV_UART_RX_PIN;
+        __HAL_RCC_GPIOC_CLK_ENABLE();
+        __HAL_RCC_GPIOD_CLK_ENABLE();
+        __HAL_RCC_UART5_CLK_ENABLE();
+        gpio.Pin = OPENMV_UART_TX_PIN;
         gpio.Mode = GPIO_MODE_AF_PP;
         gpio.Pull = GPIO_PULLUP;
         gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-        gpio.Alternate = GPIO_AF7_USART1;
+        gpio.Alternate = GPIO_AF8_UART5;
         HAL_GPIO_Init(OPENMV_UART_TX_PORT, &gpio);
-        inst = USART1;
-        irqn = USART1_IRQn;
+        gpio.Pin = OPENMV_UART_RX_PIN;
+        HAL_GPIO_Init(OPENMV_UART_RX_PORT, &gpio);
+        inst = UART5;
+        irqn = UART5_IRQn;
         prio = 2U;
     } else if (id == BSP_UART_MOTOR) {
         __HAL_RCC_GPIOA_CLK_ENABLE();

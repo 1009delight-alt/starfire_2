@@ -10,7 +10,7 @@
 #define CFG_ENABLE_OLED                 1U  /* SPI2 1.8 寸 ST7735S 彩屏（PB10~PB13、PB15） */
 #define CFG_ENABLE_SONAR                1U  /* PB6 Trig / PB7 Echo(TIM4_CH2) HC-SR04 超声 */
 #define CFG_ENABLE_GRAY                 1U  /* PE2~PE4 + PC0(ADC1_IN10)   */
-#define CFG_ENABLE_OPENMV               1U  /* PA9/PA10  USART1 <-> OpenMV*/
+#define CFG_ENABLE_OPENMV               1U  /* PC12/PD2  UART5 <-> OpenMV */
 #define CFG_ENABLE_DEBUG_UART           0U  /* PC6/PC7   USART6 遥测打印  */
 
 #define CFG_MOTOR_RX_TIMEOUT_MS         300U /* 运动中编码器回传超时急停(ms) */

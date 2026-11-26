@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 typedef enum {
-    BSP_UART_OPENMV = 0,    /* USART1: PA9(TX), PA10(RX) */
+    BSP_UART_OPENMV = 0,    /* UART5: PC12(TX), PD2(RX) */
     BSP_UART_MOTOR  = 1,    /* USART2: PA2(TX), PA3(RX)  */
     BSP_UART_DEBUG  = 2,    /* USART6: PC6(TX), PC7(RX)  */
     BSP_UART_COUNT

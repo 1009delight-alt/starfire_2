@@ -18,11 +18,11 @@
 #define MOTOR_UART_RX_PORT      GPIOA
 #define MOTOR_UART_RX_PIN       GPIO_PIN_3
 
-/* OpenMV USART1 */
-#define OPENMV_UART_TX_PORT     GPIOA
-#define OPENMV_UART_TX_PIN      GPIO_PIN_9
-#define OPENMV_UART_RX_PORT     GPIOA
-#define OPENMV_UART_RX_PIN      GPIO_PIN_10
+/* OpenMV UART5 */
+#define OPENMV_UART_TX_PORT     GPIOC
+#define OPENMV_UART_TX_PIN      GPIO_PIN_12
+#define OPENMV_UART_RX_PORT     GPIOD
+#define OPENMV_UART_RX_PIN      GPIO_PIN_2
 
 /* 预留调试串口 USART6 */
 #define DBG_UART_TX_PORT        GPIOC

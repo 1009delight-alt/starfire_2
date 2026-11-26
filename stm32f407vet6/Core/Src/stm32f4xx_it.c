@@ -9,7 +9,7 @@ void SysTick_Handler(void)
     HAL_SYSTICK_IRQHandler();
 }
 
-void USART1_IRQHandler(void)
+void UART5_IRQHandler(void)
 {
     BspUart_IRQHandler(BSP_UART_OPENMV);
 }
